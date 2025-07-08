@@ -88,6 +88,7 @@ MediaHelp 是一个强大的媒体资源管理工具，支持多个主流网盘�
 docker run -d \
   -p 3300:80 \
   -v /你的配置目录:/app/backend/config \
+  -v /你的配置目录:/app/backend/db \
   --name mediahelper \
   --restart unless-stopped \
   rongyunmu/mediahelp
