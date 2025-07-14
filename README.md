@@ -150,6 +150,8 @@ docker run -d \
     <img src="wiki/img/bea32a55-6743-468a-9193-10d52b068729.png" alt="打赏二维码" width="200"/>
 </div>
 
+感谢TG  Bzmshang 大佬的打赏
+
 ## 📝 免责声明
 
 - 本项目为个人兴趣开发，旨在提高网盘使用效率
