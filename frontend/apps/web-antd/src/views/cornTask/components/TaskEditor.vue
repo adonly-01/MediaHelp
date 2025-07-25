@@ -151,8 +151,7 @@ const filterResource = (keyword?: string) => {
 
 const handleSearch = (_value: string) => {
   if (currentTask.value?.task) {
-    cloudType.value =
-      currentTask.value.task === 'quark_auto_save' ? 'quark' : 'tianyiyun';
+    cloudType.value = 'tianyiyun';
     // 进行资源搜索
     loadResource(_value);
   } else {
@@ -211,9 +210,7 @@ const onSelectFolderOkShareQuark = (url: string) => {
 const onSelectFolderOkShareTianyiyun = (fid: string) => {
   currentTask.value.sourceDir = fid;
 };
-const onSelectFolderOkSelfQuark = (path: string) => {
-  currentTask.value.targetDir = `/${path}`;
-};
+
 const onSelectFolderOkSelfTianyiyun = (fid: string) => {
   currentTask.value.targetDir = fid;
 };
@@ -346,8 +343,10 @@ const onOk = () => {
           <AutoComplete
             v-model:value="currentTask.pattern"
             :options="[
-              { label: '电视节目', value: '$TV_PRO' },
-              { label: '综艺', value: '$SHOW_PRO' },
+              { label: '视频系列', value: 'VIDEO_SERIES' },
+              { label: '电视节目', value: 'SERIES_FORMAT' },
+              { label: '综艺节目', value: 'VARIETY_SHOW' },
+              { label: '内容过滤', value: 'CONTENT_FILTER' },
             ]"
             @select="onSelectPattern"
             style="width: 50%"
@@ -379,8 +378,11 @@ const onOk = () => {
               style="width: calc(33% - 20px)"
               placeholder="请选择规则类型"
             >
-              <Select.Option value="{E}">集数</Select.Option>
-              <Select.Option value="{SXX}">季数</Select.Option>
+              <Select.Option value="EPISODE">集数</Select.Option>
+              <Select.Option value="SEASON">季数</Select.Option>
+              <Select.Option value="SEASON_FULL">完整季数</Select.Option>
+              <Select.Option value="YEAR">年份</Select.Option>
+              <Select.Option value="CHINESE_TEXT">中文内容</Select.Option>
             </Select>
             <Select
               v-model:value="item.symbol"
@@ -420,9 +422,9 @@ const onOk = () => {
       v-model:open="selectFolderOpen"
       :url="url"
       :cloud-type="cloudType"
-      @ok-share-quark="onSelectFolderOkShareQuark"
+
       @ok-share-tianyiyun="onSelectFolderOkShareTianyiyun"
-      @ok-self-quark="onSelectFolderOkSelfQuark"
+
       @ok-self-tianyiyun="onSelectFolderOkSelfTianyiyun"
     />
   </Modal>

@@ -50,9 +50,6 @@ const gridOptions: VxeGridProps = {
       title: '任务类型',
       minWidth: 100,
       formatter: ({ cellValue }): string => {
-        if (cellValue === 'quark_auto_save') {
-          return '夸克自动转存';
-        }
         if (cellValue === 'cloud189_auto_save') {
           return '天翼自动转存';
         }

@@ -1,53 +1,6 @@
 import { requestClient } from '#/api/request';
 
-/**
- * quark 分享文件列表
- */
-export const getQuarkShareFileListApi = (params: any) => {
-  return requestClient.get('/quark/share/files', { params });
-};
 
-/**
- * quark 保存文件
- */
-export const saveQuarkFileApi = (data: any) => {
-  return requestClient.post('/quark/share/save', data);
-};
-
-/**
- * quark 获取文件列表
- */
-export const getQuarkFileListApi = (params: any) => {
-  return requestClient.get('/quark/files', { params });
-};
-
-/**
- * quark 获取文件夹目录对应的fid
- */
-export const getQuarkFidsApi = (data: any) => {
-  return requestClient.post('/quark/fids', data);
-};
-
-/**
- * quark 重命名文件
- */
-export const renameQuarkFileApi = (data: any) => {
-  return requestClient.post('/quark/rename', data);
-};
-
-/**
- * 获取目录列表
- */
-export const postQuarkCreateDirectoryApi = (data: any) => {
-  return requestClient.post('/quark/directory', data);
-};
-
-/**
- * 删除文件
- */
-export const deleteQuarkFileApi = (data: any) => {
-  return requestClient.delete('/quark/files', { data });
-};
 
 /**
  * 189 获取文件列表

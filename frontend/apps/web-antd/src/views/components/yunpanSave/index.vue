@@ -9,16 +9,10 @@ import FolderSelect from '../FolderSelect/index.vue';
 import {
   createCloud189FolderApi,
   deleteCloud189FileApi,
-  deleteQuarkFileApi,
   getCloud189FileListApi,
   getCloud189ShareFileListApi,
-  getQuarkFileListApi,
-  getQuarkShareFileListApi,
-  postQuarkCreateDirectoryApi,
   renameCloud189FileApi,
-  renameQuarkFileApi,
   saveCloud189FileApi,
-  saveQuarkFileApi,
 } from './api';
 
 const props = defineProps({
@@ -32,7 +26,6 @@ const shareUrl = computed(() => {
 });
 const fileList = ref<any[]>([]);
 const selectedFile = ref<any[]>([]);
-const stoken = ref<string>('');
 const paths = ref<any[]>([]);
 const fileList2 = ref<any[]>([]);
 const paths2 = ref<any[]>([]);
@@ -79,23 +72,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateWidth);
 });
 
-let lastShareUrl: any;
-const formatQuarkShareUrl = (dir: any = {}) => {
-  const url = lastShareUrl ?? shareUrl.value;
-  if (Object.keys(dir).length === 0 || dir.fid === 0) {
-    lastShareUrl = url.match(/.*s\/[a-z0-9]+(\?pwd=[^#]+)?/)?.[0] || '';
-    return lastShareUrl;
-  } else if (url.includes(dir.fid)) {
-    lastShareUrl = url.match(new RegExp(`.*/${dir.fid}[^/]*`))?.[0] || '';
-    return lastShareUrl;
-  } else if (url.includes('#/list/share')) {
-    lastShareUrl = `${url}/${dir.fid}-${dir.name?.replace(/-/g, '*101')}`;
-    return lastShareUrl;
-  } else {
-    lastShareUrl = `${url}#/list/share/${dir.fid}-${dir.name?.replace(/-/g, '*101')}`;
-    return lastShareUrl;
-  }
-};
+
 let filePaths: any[] = [];
 const selfSavePaths = (dir: any, filePaths: any[]) => {
   if (dir.fid) {
@@ -110,17 +87,7 @@ const selfSavePaths = (dir: any, filePaths: any[]) => {
   }
 };
 const getShareFileList = async (dir: any = {}) => {
-  if (props.item?.cloudType === 'quark') {
-    loading.value = true;
-    const res = await getQuarkShareFileListApi({
-      share_url: formatQuarkShareUrl(dir),
-    }).finally(() => {
-      loading.value = false;
-    });
-    fileList.value = res.list ?? [];
-    paths.value = res.paths ?? [];
-    stoken.value = res?.share_info?.token ?? '';
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     loading.value = true;
     const res = await getCloud189ShareFileListApi({
       share_url: shareUrl.value,
@@ -160,15 +127,7 @@ const getShareFileList = async (dir: any = {}) => {
 };
 const filepaths2: any[] = [];
 const getFileList = async (dir: any = {}) => {
-  if (props.item?.cloudType === 'quark') {
-    loading.value = true;
-    const res = await getQuarkFileListApi({ dir_id: dir.fid }).finally(() => {
-      loading.value = false;
-    });
-    fileList2.value = res.list ?? [];
-    selfSavePaths(dir, filepaths2);
-    paths2.value = [...filepaths2];
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     loading.value = true;
     const res = await getCloud189FileListApi({
       folder_id: dir.fid === undefined ? '-11' : String(dir.fid),
@@ -207,20 +166,7 @@ const getFileList = async (dir: any = {}) => {
 };
 
 const saveShareFile = async () => {
-  if (props.item?.cloudType === 'quark') {
-    const file_ids = selectedFile.value.map((item) => item.fid);
-    const file_tokens = selectedFile.value.map((item) => item.share_fid_token);
-    const target_dir = paths2.value[paths2.value.length - 1]?.fid ?? '0';
-    const pdir_fid = paths.value[paths.value.length - 1]?.fid ?? '0';
-    return await saveQuarkFileApi({
-      share_url: shareUrl.value,
-      file_ids,
-      file_tokens,
-      target_dir,
-      pdir_fid,
-      stoken: stoken.value,
-    });
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     const target_folder_id =
       paths2.value[paths2.value.length - 1]?.fid ?? '-11';
     const file_ids =
@@ -245,7 +191,6 @@ const saveShareFile = async () => {
 
 watch(open, (value) => {
   if (value) {
-    lastShareUrl = undefined;
     fileList.value = [];
     fileList2.value = [];
     paths.value = [];
@@ -288,24 +233,7 @@ const createDir = async (fileName: any) => {
     message.error('请输入文件夹名称');
     return;
   }
-  if (props.item?.cloudType === 'quark') {
-    loading.value = true;
-    await postQuarkCreateDirectoryApi({
-      name: fileName,
-      parent_id: paths2.value[paths2.value.length - 1]?.fid ?? '0',
-    })
-      .finally(() => {
-        loading.value = false;
-      })
-      .then(() => {
-        setTimeout(() => {
-          // 刷新
-          getFileList({
-            fid: paths2.value[paths2.value.length - 1]?.fid ?? '0',
-          });
-        }, 500);
-      });
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     loading.value = true;
     await createCloud189FolderApi({
       folder_name: fileName,
@@ -323,21 +251,7 @@ const createDir = async (fileName: any) => {
 };
 
 const rename = async (_file: any) => {
-  if (props.item?.cloudType === 'quark') {
-    loading.value = true;
-    await renameQuarkFileApi({
-      file_id: _file.fid,
-      new_name: _file.file_name,
-    })
-      .finally(() => {
-        loading.value = false;
-      })
-      .then(() => {
-        getFileList({
-          fid: paths2.value[paths2.value.length - 1]?.fid ?? '0',
-        });
-      });
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     loading.value = true;
     await renameCloud189FileApi({
       file_id: _file.fid,
@@ -355,20 +269,7 @@ const rename = async (_file: any) => {
 };
 
 const deleteFile = async (_file: any) => {
-  if (props.item?.cloudType === 'quark') {
-    loading.value = true;
-    await deleteQuarkFileApi({
-      file_ids: [_file.fid],
-    })
-      .finally(() => {
-        loading.value = false;
-      })
-      .then(() => {
-        getFileList({
-          fid: paths2.value[paths2.value.length - 1]?.fid ?? '0',
-        });
-      });
-  } else if (props.item?.cloudType === 'tianyiyun') {
+  if (props.item?.cloudType === 'tianyiyun') {
     loading.value = true;
     await deleteCloud189FileApi({
       file_ids: [

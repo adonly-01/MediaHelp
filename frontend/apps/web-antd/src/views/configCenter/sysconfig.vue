@@ -80,18 +80,7 @@ const [Form, formApi] = useVbenForm({
       label: '天翼云盘密码',
       labelWidth: 100,
     },
-    {
-      component: 'Divider',
-      fieldName: '',
-      label: '夸克云盘配置',
-      labelWidth: 100,
-    },
-    {
-      component: 'Input',
-      fieldName: 'quarkCookie',
-      label: '夸克云盘Cookie',
-      labelWidth: 100,
-    },
+
   ],
 });
 
@@ -104,7 +93,7 @@ const loadConfig = async () => {
   formApi.setFieldValue('alist_api_key', res.alist_api_key);
   formApi.setFieldValue('tianyiAccount', res.tianyiAccount);
   formApi.setFieldValue('tianyiPassword', res.tianyiPassword);
-  formApi.setFieldValue('quarkCookie', res.quarkCookie);
+
 };
 
 onMounted(() => {

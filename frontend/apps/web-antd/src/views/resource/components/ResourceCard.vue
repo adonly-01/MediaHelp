@@ -139,7 +139,7 @@ const onCreateTask = () => {
         class="m-2"
         size="middle"
         @click="onSave"
-        v-show="['quark', 'tianyiyun'].includes(item.cloudType)"
+        v-show="['tianyiyun'].includes(item.cloudType)"
       >
         转存
       </Button>
