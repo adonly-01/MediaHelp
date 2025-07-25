@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import Dict, Any, Callable, Optional, List
 from loguru import logger
 import re
-from task import cloud189_auto_save, quark_auto_save
+from task import cloud189_auto_save
 from utils.emby_manager import emby_manager
-from utils.notify_manager import notify_manager
+from utils.notification_service import notify_manager
 from utils.scheduled_manager import scheduled_manager
 
 class TaskResult:
@@ -35,7 +35,6 @@ class TaskScheduler:
 
     def register_system_tasks(self):
         """注册系统默认的任务处理器"""
-        self.register_task_handler("quark_auto_save", quark_auto_save.QuarkAutoSave().quark_auto_save)
         self.register_task_handler("cloud189_auto_save", cloud189_auto_save.Cloud189AutoSave().cloud189_auto_save)
         logger.info("系统任务注册完成")
 

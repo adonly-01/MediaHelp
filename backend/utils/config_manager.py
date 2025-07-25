@@ -23,8 +23,6 @@ class ConfigManager:
             "session_key": "",
             "expires_in": 0
         },
-        # 夸克网盘配置
-        "quarkCookie": "",  # 夸克网盘Cookie
         # 代理配置
         "use_proxy": False,  # 是否使用代理
         "proxy_host": "",  # 代理主机地址
@@ -43,7 +41,6 @@ class ConfigManager:
             "cloudPatterns": {
                 "aliyun": "https?://www\\.aliyundrive\\.com/s/[a-zA-Z0-9]+",
                 "tianyiyun": "https?://cloud\\.189\\.cn/t/[a-zA-Z0-9]+",
-                "quark": "https?://pan\\.quark\\.cn/s/[a-zA-Z0-9]+",
                 "baidu": "https?://pan\\.baidu\\.com/s/[a-zA-Z0-9_-]+"
             }
         }

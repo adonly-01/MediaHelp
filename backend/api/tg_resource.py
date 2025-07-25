@@ -208,7 +208,6 @@ async def search_resources(
     5. cloudType 表示云盘类型，支持：
        - aliyun: 阿里云盘
        - tianyiyun: 天翼云盘
-       - quark: 夸克网盘
        - baidu: 百度网盘
     """
     try:

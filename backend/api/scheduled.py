@@ -144,8 +144,7 @@ async def get_task_types(current_user: User = Depends(get_current_user)):
     # 根据key 对应中文
     task_types = list(task_scheduler._task_handlers.keys())
     task_types_dict = {
-        "cloud189_auto_save": "天翼云盘自动保存",
-        "quark_auto_save": "夸克网盘自动保存"
+        "cloud189_auto_save": "天翼云盘自动保存"
     }
     response = [{'label': task_types_dict[task_type],'value':task_type} for task_type in task_types]
     return Response(data=response)

@@ -4,7 +4,7 @@ from typing import Any, Dict
 from loguru import logger
 from utils import config_manager, logger_service, scheduled_manager
 from utils.cloud189.client import Cloud189Client
-from utils.magic_rename import MagicRename
+from utils.smart_rename import SmartRenameEngine
 
 class Cloud189AutoSave:
     client = {}
@@ -55,11 +55,12 @@ class Cloud189AutoSave:
       
       
       # 文件判重
-      mr = MagicRename(scheduled_manager.scheduled_manager.get_config().get("magic_regex", {}))
-      mr.set_taskname(self.task_name)
+      smart_patterns = scheduled_manager.scheduled_manager.get_config().get("smart_rename_patterns", {})
+      rename_engine = SmartRenameEngine(smart_patterns)
+      rename_engine.set_task_name(self.task_name)
       
-           # 魔法正则转换
-      pattern, replace = mr.magic_regex_conv(
+      # 智能正则转换
+      pattern, replace = rename_engine.apply_text_pattern(
           self.params.get("pattern", ""), self.params.get("replace", "")
       )
       logger.info(f"pattern: {pattern}")
@@ -90,16 +91,16 @@ class Cloud189AutoSave:
         # 正则文件名匹配  选择那些需要保存的文件
         should_save = True
         if start_magic:
-            should_save = mr.start_magic_is_save(start_magic, file["name"])
-        if (not mr.is_exists(
+            should_save = rename_engine.check_filter_conditions(start_magic, file["name"])
+        if (not rename_engine.check_file_exists(
                     file["name"],
                     dir_name_list,
                     (self.params.get("ignore_extension")),
                 ) and should_save):
           # 替换后的文件名
-          file_name_re = mr.sub(pattern, replace, file["name"])
+          file_name_re = rename_engine.transform_filename(pattern, replace, file["name"])
           # 判断替换后的文件名是否存在
-          if not mr.is_exists(
+          if not rename_engine.check_file_exists(
               file_name_re,
               dir_name_list,
               self.params.get("ignore_extension"),

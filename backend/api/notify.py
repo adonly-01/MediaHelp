@@ -4,7 +4,7 @@ from typing import Dict, Any
 from api.deps import get_current_user
 from models.user import User
 from schemas.response import Response
-from utils.notify_manager import notify_manager
+from utils.notification_service import notify_manager
 
 router = APIRouter(prefix="/notify", tags=["通知设置"])
 

@@ -46,7 +46,7 @@ class CloudAuthClient:
         
         response = await self.request.get(
             f"{WEB_URL}/api/portal/unifyLoginForPC.action",
-            params=params
+            params=params,
         )
         
         # 解析响应文本中的参数

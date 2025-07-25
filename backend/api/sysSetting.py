@@ -6,7 +6,7 @@ from schemas.response import Response
 from schemas.sysSetting import SysSettingUpdate, TGChannel, TGResourceConfig, ProxyConfig
 from utils.config_manager import config_manager
 from typing import Dict, Any, List, Optional
-from api.quark import quark_helpers
+
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 import json
 from datetime import datetime
@@ -94,11 +94,7 @@ async def update_system_config(
         new_config["cloud189_session"]['session_key'] = ''
         new_config["cloud189_session"]['access_token'] = ''
         new_config["tianyiPassword"] = config.tianyiPassword
-    if config.quarkCookie is not None:
-        new_config["quarkCookie"] = config.quarkCookie
-        ## 更新夸克Helper 删除这个userId的helper
-        if current_user.id in quark_helpers:
-            del quark_helpers[current_user.id]
+
     if config.use_proxy is not None:
         new_config["use_proxy"] = config.use_proxy
     if config.proxy_host is not None:

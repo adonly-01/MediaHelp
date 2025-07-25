@@ -25,7 +25,6 @@ class SysSettingBase(BaseModel):
     alist_api_key: str = Field(default="", description="Alist API密钥")
     tianyiAccount: str = Field(default="", description="天翼账号")
     tianyiPassword: str = Field(default="", description="天翼密码")
-    quarkCookie: str = Field(default="", description="夸克Cookie")
     tg_resource: Optional[TGResourceConfig] = Field(
         default_factory=TGResourceConfig,
         description="TG资源配置"
@@ -43,7 +42,6 @@ class SysSettingUpdate(BaseModel):
     alist_api_key: Optional[str] = Field(default=None, description="Alist API密钥")
     tianyiAccount: Optional[str] = Field(default=None, description="天翼账号")
     tianyiPassword: Optional[str] = Field(default=None, description="天翼密码")
-    quarkCookie: Optional[str] = Field(default=None, description="夸克Cookie")
     use_proxy: Optional[bool] = Field(default=None, description="是否使用代理")
     proxy_host: Optional[str] = Field(default=None, description="代理主机")
     proxy_port: Optional[str] = Field(default=None, description="代理端口")

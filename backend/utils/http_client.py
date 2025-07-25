@@ -88,6 +88,7 @@ class HttpClient:
             if host and port:
                 proxy = f"http://{host}:{port}"
         
+        logger.info(f"请求参数: {method} {url} {params} {headers} {json} {data}")
         for i in range(retry_times):
             try:
                 # logger.info(f"请求参数: {method} {url} {params} {headers} {json} {data}")

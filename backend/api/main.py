@@ -5,7 +5,6 @@ from api.sysSetting import router as sysSetting_router
 from api.notify import router as notify_router
 from api.tg_resource import router as tg_resource_router
 from api import proxy
-from api.quark import router as quark_router
 from api.cloud189 import router as cloud189_router
 from api.scheduled import router as scheduled_router
 from api.logs import router as logs_router
@@ -18,7 +17,6 @@ api_router.include_router(douban_router)
 api_router.include_router(sysSetting_router)
 api_router.include_router(notify_router)
 api_router.include_router(tg_resource_router)
-api_router.include_router(quark_router)
 api_router.include_router(cloud189_router)
 api_router.include_router(scheduled_router, prefix="/scheduled", tags=["scheduled"])
 api_router.include_router(logs_router)
