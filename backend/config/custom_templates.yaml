@@ -1,0 +1,8 @@
+# 自定义重命名模板配置文件
+# 用户添加的自定义模板将保存在这里
+
+# 示例模板（可以删除）
+example_template:
+  template: "{title}.S{season:02d}E{episode:02d}.{extension}"
+  description: "示例模板 - 标准电视剧格式"
+  created_at: 1703520000.0

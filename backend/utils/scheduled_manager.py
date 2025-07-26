@@ -12,21 +12,28 @@ class ScheduledManager:
     _default_config = {
         "smart_rename_patterns": {
             "VIDEO_SERIES": {
-                "pattern": r"^(.*)(?:[Ss](\d{1,2}))?.*?(?:第|[EePpXx]|\.|_|-|\s)(\d{1,3})(?![0-9]).*\.(mp4|mkv)$",
-                "replace": r"\1S\2E\3.\4"
+                "template": "{title}.S{season:02d}E{episode:02d}.{extension}",
+                "description": "电视剧标准格式"
             },
             "CONTENT_FILTER": {
-                "pattern": r"^((?!纯享|加更|超前企划|训练室|蒸蒸日上).)*$",
-                "replace": ""
+                "template": "",
+                "description": "内容过滤器"
             },
             "VARIETY_SHOW": {
-                "pattern": r"^((?!纯享|加更|抢先|预告).)*第(\d+)期.*$",
-                "replace": "{INDEX}.{TASK}.{DATE_INFO}.第{EPISODE}期{PART_INFO}.{EXTENSION}"
+                "template": "{title}.第{episode}期.{extension}",
+                "description": "综艺节目格式"
             },
             "SERIES_FORMAT": {
-                "pattern": "",
-                "replace": "{TASK}.{SEASON_FULL}E{EPISODE}.{EXTENSION}"
+                "template": "{title}.S{season:02d}E{episode:02d}.{extension}",
+                "description": "系列格式"
             }
+        },
+        "media_rename_templates": {
+            "tv_simple": "{title}.S{season:02d}E{episode:02d}.{extension}",
+            "tv_detailed": "{title}.S{season:02d}E{episode:02d}.{year}.{quality}.{source}.{extension}",
+            "movie_simple": "{title}.{year}.{extension}",
+            "variety_simple": "{title}.第{episode}期.{extension}",
+            "anime_simple": "{title}.第{episode:02d}话.{extension}"
         }
     }
 
@@ -101,31 +108,49 @@ class ScheduledManager:
         """
         converted_config = {}
 
-        # 变量名映射表
+        # 变量名映射表 - 将旧变量名转换为新的模板变量
         variable_mapping = {
-            "{TASKNAME}": "{TASK}",
-            "{I}": "{INDEX}",
-            "{II}": "{INDEX}",
-            "{EXT}": "{EXTENSION}",
-            "{CHINESE}": "{CHINESE_TEXT}",
-            "{DATE}": "{DATE_INFO}",
-            "{S}": "{SEASON}",
-            "{SXX}": "{SEASON_FULL}",
-            "{E}": "{EPISODE}",
-            "{PART}": "{PART_INFO}",
-            "{VER}": "{VERSION}"
+            "{TASKNAME}": "{title}",
+            "{I}": "{episode}",
+            "{II}": "{episode:02d}",
+            "{EXT}": "{extension}",
+            "{CHINESE}": "{title}",
+            "{DATE}": "{year}{month:02d}{day:02d}",
+            "{S}": "{season}",
+            "{SXX}": "S{season:02d}",
+            "{E}": "{episode}",
+            "{PART}": "{part_info}",
+            "{VER}": "{version}"
+        }
+
+        # 预设的模板映射
+        template_mapping = {
+            "$TV": "{title}.S{season:02d}E{episode:02d}.{extension}",
+            "$BLACK_WORD": "",  # 内容过滤
+            "$SHOW_PRO": "{title}.第{episode}期.{extension}",
+            "$TV_PRO": "{title}.S{season:02d}E{episode:02d}.{extension}"
         }
 
         for key, config in magic_regex_config.items():
-            converted_config[key] = {
-                "pattern": config.get("pattern", ""),
-                "replace": config.get("replace", "")
-            }
+            # 如果有预设模板，使用预设模板
+            if key in template_mapping:
+                converted_config[key] = {
+                    "template": template_mapping[key],
+                    "description": f"从旧配置转换: {key}"
+                }
+            else:
+                # 转换旧的替换模式为新模板
+                replace_pattern = config.get("replace", "")
 
-            # 转换变量名
-            for old_var, new_var in variable_mapping.items():
-                if old_var in converted_config[key]["replace"]:
-                    converted_config[key]["replace"] = converted_config[key]["replace"].replace(old_var, new_var)
+                # 转换变量名
+                for old_var, new_var in variable_mapping.items():
+                    if old_var in replace_pattern:
+                        replace_pattern = replace_pattern.replace(old_var, new_var)
+
+                converted_config[key] = {
+                    "template": replace_pattern,
+                    "description": f"从旧配置转换: {key}"
+                }
 
         return converted_config
 

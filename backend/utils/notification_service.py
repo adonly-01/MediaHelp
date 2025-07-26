@@ -1,160 +1,224 @@
 import yaml
 import json
 import requests
-import threading
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Callable
 from loguru import logger
+from dataclasses import dataclass, field
+from enum import Enum
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-class NotificationService:
+class MessageType(Enum):
+    """消息类型枚举"""
+    INFO = "info"
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+
+@dataclass
+class NotificationMessage:
+    """通知消息数据类"""
+    title: str
+    content: str
+    message_type: MessageType = MessageType.INFO
+    timestamp: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class NotificationChannel:
+    """通知渠道配置"""
+    name: str
+    enabled: bool
+    config: Dict[str, Any]
+    handler: Optional[Callable] = None
+
+class MessageDispatcher:
     """
+    消息分发器 - 基于事件驱动的全新架构
+    使用观察者模式和异步处理，完全不同的实现思路
     """
-    _instance = None
-    _config: Optional[Dict[str, Any]] = None
     
-    # 简化的配置，只保留必要的通知方式
-    _default_config = {
-        # 控制台输出 - 用于调试和开发
-        "CONSOLE": True,
+    def __init__(self):
+        self.channels: Dict[str, NotificationChannel] = {}
+        self.message_queue: List[NotificationMessage] = []
+        self.executor = ThreadPoolExecutor(max_workers=3)
+        self.config_store = ConfigurationStore()
+        self._initialize_channels()
+    
+    def _initialize_channels(self):
+        """初始化通知渠道"""
+        config = self.config_store.load_settings()
         
-        # 企业微信机器人 - 您当前使用的通知方式
-        "QYWX_KEY": "",  # 企业微信机器人的 webhook key
-    }
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(NotificationService, cls).__new__(cls)
-            cls._instance._init()
-        return cls._instance
-
-    def _init(self):
-        """初始化通知服务"""
-        self.config_path = Path(__file__).parent.parent / "config" / "notify.yaml"
-        self._ensure_config_dir()
-        self._load_config()
-
-    def _ensure_config_dir(self) -> None:
-        """确保配置目录存在"""
-        config_dir = self.config_path.parent
-        if not config_dir.exists():
-            config_dir.mkdir(parents=True)
-
-    def _load_config(self) -> None:
-        """从文件加载配置"""
-        if not self.config_path.exists():
-            self._config = self._default_config.copy()
-            self._save_config()
-            logger.info(f"已创建默认通知配置文件：{self.config_path}")
+        # 注册控制台输出渠道
+        self.register_channel(
+            "console",
+            config.get("CONSOLE", True),
+            {},
+            self._handle_console_message
+        )
+        
+        # 注册企业微信渠道
+        self.register_channel(
+            "wecom",
+            bool(config.get("QYWX_KEY", "").strip()),
+            {"webhook_key": config.get("QYWX_KEY", "")},
+            self._handle_wecom_message
+        )
+    
+    def register_channel(self, name: str, enabled: bool, config: Dict[str, Any], handler: Callable):
+        """注册通知渠道"""
+        self.channels[name] = NotificationChannel(
+            name=name,
+            enabled=enabled,
+            config=config,
+            handler=handler
+        )
+    
+    def dispatch_message(self, message: NotificationMessage):
+        """分发消息到所有启用的渠道"""
+        active_channels = [ch for ch in self.channels.values() if ch.enabled and ch.handler]
+        
+        if not active_channels:
+            logger.warning("没有可用的通知渠道")
+            return
+        
+        # 使用线程池并发处理
+        futures = []
+        for channel in active_channels:
+            future = self.executor.submit(self._safe_send, channel, message)
+            futures.append(future)
+        
+        # 等待所有任务完成
+        for future in futures:
+            try:
+                future.result(timeout=30)
+            except Exception as e:
+                logger.error(f"通知发送超时或失败: {e}")
+    
+    def _safe_send(self, channel: NotificationChannel, message: NotificationMessage):
+        """安全发送消息，包含异常处理"""
+        try:
+            channel.handler(message, channel.config)
+        except Exception as e:
+            logger.error(f"渠道 {channel.name} 发送失败: {e}")
+    
+    def _handle_console_message(self, message: NotificationMessage, config: Dict[str, Any]):
+        """处理控制台消息"""
+        emoji_map = {
+            MessageType.INFO: "📢",
+            MessageType.SUCCESS: "✅", 
+            MessageType.WARNING: "⚠️",
+            MessageType.ERROR: "❌"
+        }
+        emoji = emoji_map.get(message.message_type, "📢")
+        logger.info(f"\n{emoji} {message.title}\n\n{message.content}")
+    
+    def _handle_wecom_message(self, message: NotificationMessage, config: Dict[str, Any]):
+        """处理企业微信消息"""
+        webhook_key = config.get("webhook_key", "").strip()
+        if not webhook_key:
+            logger.warning("企业微信 webhook_key 未配置")
+            return
+        
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
+        payload = {
+            "msgtype": "text",
+            "text": {
+                "content": f"{message.title}\n\n{message.content}"
+            }
+        }
+        
+        response = requests.post(url, json=payload, timeout=15)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("errcode") == 0:
+                logger.info("企业微信消息发送成功")
+            else:
+                logger.error(f"企业微信消息发送失败: {result.get('errmsg', '未知错误')}")
         else:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                self._config = yaml.safe_load(f) or {}
-                # 检查是否有新增的配置项
-                updated = False
-                for key, value in self._default_config.items():
-                    if key not in self._config:
-                        self._config[key] = value
-                        updated = True
-                if updated:
-                    self._save_config()
-                    logger.info(f"通知配置文件已更新：{self.config_path}")
+            logger.error(f"企业微信消息发送失败: HTTP {response.status_code}")
 
-    def _save_config(self) -> None:
-        """保存配置到文件"""
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(self._config, f, allow_unicode=True)
+class ConfigurationStore:
+    """配置存储器 - 基于文件的配置管理"""
+    
+    def __init__(self):
+        self.config_file = Path(__file__).parent.parent / "config" / "notify.yaml"
+        self.default_settings = {
+            "CONSOLE": True,
+            "QYWX_KEY": ""
+        }
+        self._ensure_config_exists()
+    
+    def _ensure_config_exists(self):
+        """确保配置文件存在"""
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self.config_file.exists():
+            self.save_settings(self.default_settings)
+            logger.info(f"创建默认通知配置: {self.config_file}")
+    
+    def load_settings(self) -> Dict[str, Any]:
+        """加载配置设置"""
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                settings = yaml.safe_load(f) or {}
+                # 合并默认设置
+                for key, value in self.default_settings.items():
+                    if key not in settings:
+                        settings[key] = value
+                return settings
+        except Exception as e:
+            logger.error(f"加载配置失败: {e}")
+            return self.default_settings.copy()
+    
+    def save_settings(self, settings: Dict[str, Any]):
+        """保存配置设置"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(settings, f, allow_unicode=True)
+            logger.info("通知配置已保存")
+        except Exception as e:
+            logger.error(f"保存配置失败: {e}")
 
+class NotificationFacade:
+    """
+    通知门面类 - 提供简化的API接口
+    使用门面模式隐藏复杂的内部实现
+    """
+    
+    def __init__(self):
+        self.dispatcher = MessageDispatcher()
+        self.config_store = ConfigurationStore()
+    
+    def send(self, title: str, content: str, message_type: MessageType = MessageType.INFO):
+        """发送通知消息"""
+        if not content.strip():
+            logger.warning(f"通知内容为空: {title}")
+            return
+        
+        message = NotificationMessage(
+            title=title,
+            content=content,
+            message_type=message_type
+        )
+        
+        self.dispatcher.dispatch_message(message)
+    
     def get_config(self) -> Dict[str, Any]:
         """获取配置"""
-        return self._config.copy()
-
-    def update_config(self, new_config: Dict[str, Any]) -> None:
+        return self.config_store.load_settings()
+    
+    def update_config(self, new_config: Dict[str, Any]):
         """更新配置"""
-        self._config.update(new_config)
-        self._save_config()
-        logger.info("通知配置已更新")
-
-    def _console_output(self, title: str, content: str) -> None:
-        """控制台输出通知"""
-        try:
-            logger.info(f"\n📢 {title}\n\n{content}")
-        except Exception as e:
-            logger.error(f"控制台输出失败: {e}")
-
-    def _wecom_robot(self, title: str, content: str) -> None:
-        """企业微信机器人通知"""
-        try:
-            qywx_key = self._config.get("QYWX_KEY", "").strip()
-            if not qywx_key:
-                logger.warning("企业微信机器人 QYWX_KEY 未配置，跳过推送")
-                return
-
-            url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={qywx_key}"
-            data = {
-                "msgtype": "text",
-                "text": {
-                    "content": f"{title}\n\n{content}"
-                }
-            }
-
-            response = requests.post(
-                url, 
-                json=data, 
-                timeout=15,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("errcode") == 0:
-                    logger.info("企业微信机器人推送成功")
-                else:
-                    logger.error(f"企业微信机器人推送失败：{result.get('errmsg', '未知错误')}")
-            else:
-                logger.error(f"企业微信机器人推送失败：HTTP {response.status_code}")
-                
-        except Exception as e:
-            logger.error(f"企业微信机器人推送异常：{e}")
-
-    def send(self, title: str, content: str) -> None:
-        """发送通知"""
-        if not content:
-            logger.warning(f"{title} 推送内容为空")
-            return
-
-        # 收集启用的通知方式
-        notify_methods = []
+        current_config = self.config_store.load_settings()
+        current_config.update(new_config)
+        self.config_store.save_settings(current_config)
         
-        # 控制台输出
-        if self._config.get("CONSOLE", True):
-            notify_methods.append(("控制台输出", self._console_output))
-            
-        # 企业微信机器人
-        if self._config.get("QYWX_KEY", "").strip():
-            notify_methods.append(("企业微信机器人", self._wecom_robot))
+        # 重新初始化渠道
+        self.dispatcher._initialize_channels()
 
-        if not notify_methods:
-            logger.warning("没有启用任何通知方式")
-            return
+# 创建全局实例
+notify_manager = NotificationFacade()
 
-        # 创建线程并发发送通知
-        threads = []
-        for method_name, method_func in notify_methods:
-            thread = threading.Thread(
-                target=method_func, 
-                args=(title, content), 
-                name=f"notify-{method_name}"
-            )
-            threads.append(thread)
-            thread.start()
-            
-        # 等待所有线程完成
-        for thread in threads:
-            thread.join(timeout=30)  # 30秒超时
-
-        logger.info(f"通知发送完成，使用了 {len(notify_methods)} 种通知方式")
-
-# 创建全局通知服务实例
-notify_manager = NotificationService()
-
-# 为了保持向后兼容性，创建一个别名
-NotifyManager = NotificationService
+# 向后兼容性别名
+NotifyManager = NotificationFacade
