@@ -26,6 +26,8 @@ import {
   createCornTaskApi,
   getCornTaskTypeListApi,
   updateCornTaskApi,
+  getRenameTemplatesApi,
+  getTemplateVariablesApi,
 } from '../api';
 import SelectFolder from './SelectFolder.vue';
 
@@ -59,6 +61,9 @@ watch(
     currentTask.value.startMagic = params.startMagic || [];
     currentTask.value.pattern = params.pattern;
     currentTask.value.replace = params.replace;
+    currentTask.value.renameTemplate = params.renameTemplate || '';
+    currentTask.value.renameStyle = params.renameStyle || 'simple';
+    currentTask.value.ignoreExtension = params.ignoreExtension || false;
     currentTask.value.cron = task.cron ?? '0 19-23 * * *';
     resourceList.value = [];
     allResourceList.value = [];
@@ -91,6 +96,9 @@ const updateWidth = () => {
 onMounted(() => {
   updateWidth();
   window.addEventListener('resize', updateWidth);
+  // 加载重命名模板和变量
+  loadRenameTemplates();
+  loadTemplateVariables();
 });
 
 onUnmounted(() => {
@@ -98,6 +106,9 @@ onUnmounted(() => {
 });
 const loading = ref(false);
 const resourceList = ref<any[]>([]);
+const showLegacyOptions = ref(false);
+const renameTemplates = ref<any[]>([]);
+const templateVariables = ref<any[]>([]);
 const allResourceList = ref<any[]>([]);
 const cloudTypeList = ref<any[]>([]);
 const cloudType = ref('');
@@ -215,10 +226,76 @@ const onSelectFolderOkSelfTianyiyun = (fid: string) => {
   currentTask.value.targetDir = fid;
 };
 
+// 加载重命名模板
+const loadRenameTemplates = async () => {
+  try {
+    const response = await getRenameTemplatesApi();
+    if (response.data) {
+      renameTemplates.value = Object.entries(response.data).map(([key, value]: [string, any]) => ({
+        value: key,
+        label: value.description || key,
+        template: value.template,
+        type: value.type
+      }));
+    }
+  } catch (error) {
+    console.error('加载重命名模板失败:', error);
+  }
+};
+
+// 加载模板变量
+const loadTemplateVariables = async () => {
+  try {
+    const response = await getTemplateVariablesApi();
+    if (response.data) {
+      templateVariables.value = Object.entries(response.data).map(([key, value]: [string, any]) => ({
+        variable: `{${key}}`,
+        description: value
+      }));
+    }
+  } catch (error) {
+    console.error('加载模板变量失败:', error);
+  }
+};
+
 // 重名命规则
 const onSelectPattern: any = (value: string) => {
-  currentTask.value.pattern = value;
-  currentTask.value.replace = '';
+  const patterns = {
+    VIDEO_SERIES: {
+      pattern: '^(.*)(?:[Ss](\\d{1,2}))?.*?(?:第|[EePpXx]|\\.|_|-|\\s)(\\d{1,3})(?![0-9]).*\\.(mp4|mkv)$',
+      replace: '\\1S\\2E\\3.\\4'
+    },
+    SERIES_FORMAT: {
+      pattern: '',
+      replace: '{TASK}.{SEASON_FULL}E{EPISODE}.{EXTENSION}'
+    },
+    VARIETY_SHOW: {
+      pattern: '^((?!纯享|加更|抢先|预告).)*第(\\d+)期.*$',
+      replace: '{INDEX}.{TASK}.{DATE_INFO}.第{EPISODE}期{PART_INFO}.{EXTENSION}'
+    },
+    CONTENT_FILTER: {
+      pattern: '^((?!纯享|加更|超前企划|训练室|蒸蒸日上).)*$',
+      replace: ''
+    }
+  };
+
+  const selected = patterns[value as keyof typeof patterns];
+  if (selected) {
+    currentTask.value.pattern = selected.pattern;
+    currentTask.value.replace = selected.replace;
+  } else {
+    currentTask.value.pattern = value;
+    currentTask.value.replace = '';
+  }
+};
+
+// 插入模板变量
+const insertVariable = (variable: string) => {
+  if (currentTask.value.renameTemplate) {
+    currentTask.value.renameTemplate += variable;
+  } else {
+    currentTask.value.renameTemplate = variable;
+  }
 };
 // 保存文件规则
 const onAddRule = () => {
@@ -242,9 +319,14 @@ const onOk = () => {
         targetDir: res.targetDir,
         sourceDir: currentTask.value.sourceDir,
         startMagic: res.startMagic,
+        // 新的重命名配置
+        renameStyle: currentTask.value.renameStyle || 'simple',
+        renameTemplate: currentTask.value.renameTemplate || '',
+        ignoreExtension: currentTask.value.ignoreExtension || false,
+        // 兼容旧的配置
         pattern: currentTask.value.pattern,
-        isShareUrlValid: true,
         replace: currentTask.value.replace,
+        isShareUrlValid: true,
       },
     };
     const methods = props.task?.cron ? updateCornTaskApi : createCornTaskApi;
@@ -338,7 +420,88 @@ const onOk = () => {
           <Button type="primary" @click="onSelecSelftFolder">选择目录</Button>
         </Input.Group>
       </FormItem>
-      <FormItem label="重名命规则">
+      <FormItem label="智能重命名配置">
+        <div class="space-y-3">
+          <!-- 重命名风格选择 -->
+          <div>
+            <label class="block text-sm font-medium mb-1">重命名风格</label>
+            <Select
+              v-model:value="currentTask.renameStyle"
+              placeholder="选择重命名风格"
+              class="w-full"
+            >
+              <!-- 预设选项 -->
+              <Select.Option value="simple">简洁格式 (标题.S01E01.扩展名)</Select.Option>
+              <Select.Option value="standard">标准格式 (包含画质、来源等信息)</Select.Option>
+              <Select.Option value="custom">自定义模板</Select.Option>
+
+              <!-- 动态加载的模板 -->
+              <Select.OptGroup label="预设模板" v-if="renameTemplates.length > 0">
+                <Select.Option
+                  v-for="template in renameTemplates.filter(t => t.type === 'preset')"
+                  :key="template.value"
+                  :value="template.value"
+                >
+                  {{ template.label }}
+                </Select.Option>
+              </Select.OptGroup>
+
+              <!-- 用户自定义模板 -->
+              <Select.OptGroup label="自定义模板" v-if="renameTemplates.some(t => t.type === 'custom')">
+                <Select.Option
+                  v-for="template in renameTemplates.filter(t => t.type === 'custom')"
+                  :key="template.value"
+                  :value="template.value"
+                >
+                  {{ template.label }}
+                </Select.Option>
+              </Select.OptGroup>
+            </Select>
+          </div>
+
+          <!-- 自定义模板输入 -->
+          <div v-if="currentTask.renameStyle === 'custom'">
+            <label class="block text-sm font-medium mb-1">自定义模板</label>
+            <Input
+              v-model:value="currentTask.renameTemplate"
+              placeholder="例如: {title}.S{season:02d}E{episode:02d}.{extension}"
+              class="w-full"
+            />
+            <div class="text-xs text-gray-500 mt-1">
+              <div class="mb-2">可用变量:</div>
+              <div class="grid grid-cols-2 gap-1" v-if="templateVariables.length > 0">
+                <div
+                  v-for="variable in templateVariables.slice(0, 8)"
+                  :key="variable.variable"
+                  class="text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer hover:bg-gray-200"
+                  @click="insertVariable(variable.variable)"
+                  :title="variable.description"
+                >
+                  {{ variable.variable }}
+                </div>
+              </div>
+              <div v-else>
+                {title} {season} {episode} {year} {quality} {source} {extension} 等
+              </div>
+            </div>
+          </div>
+
+          <!-- 高级选项 -->
+          <div class="flex items-center space-x-4">
+            <label class="flex items-center">
+              <input
+                type="checkbox"
+                v-model="currentTask.ignoreExtension"
+                class="mr-2"
+              />
+              <span class="text-sm">忽略扩展名检查重复</span>
+            </label>
+          </div>
+        </div>
+      </FormItem>
+
+      <!-- 兼容性配置 - 保留旧的配置选项 -->
+      <FormItem label="传统重命名规则 (兼容模式)" v-if="showLegacyOptions">
         <Input.Group compact>
           <AutoComplete
             v-model:value="currentTask.pattern"
@@ -363,7 +526,19 @@ const onOk = () => {
             placeholder="请输入替换规则"
           />
         </Input.Group>
+        <div class="text-xs text-gray-500 mt-1">
+          <Button type="link" size="small" @click="showLegacyOptions = false">
+            隐藏传统配置
+          </Button>
+        </div>
       </FormItem>
+
+      <!-- 显示传统配置的按钮 -->
+      <div v-if="!showLegacyOptions" class="mb-4">
+        <Button type="link" size="small" @click="showLegacyOptions = true">
+          显示传统重命名配置 (兼容模式)
+        </Button>
+      </div>
       <FormItem label="保存文件规则" name="startMagic">
         <div class="w-full">
           <Button type="primary" @click="onAddRule">添加规则</Button>

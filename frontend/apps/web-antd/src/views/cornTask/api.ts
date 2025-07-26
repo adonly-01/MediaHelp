@@ -75,3 +75,17 @@ export async function getLogListApi(params: any) {
     },
   });
 }
+
+/**
+ * 获取重命名模板列表
+ */
+export async function getRenameTemplatesApi() {
+  return requestClient.get('/smart-rename/templates', {});
+}
+
+/**
+ * 获取模板变量列表
+ */
+export async function getTemplateVariablesApi() {
+  return requestClient.get('/smart-rename/templates/variables', {});
+}
