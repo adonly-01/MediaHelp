@@ -111,8 +111,14 @@ class MediaAnalyzer:
             # 英文序号 (Episode1.mp4, EP01.mp4, E01.mp4)
             'english_episode': r'^(Episode|EP|E)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
 
-            # 混合格式 (剧名01.mp4, 剧名第1集.mp4)
-            'mixed_format': r'^(.+?)第?(\d{1,3})[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            # 混合格式 (剧名01.mp4, 剧名第1集.mp4) - 只匹配真正的中文集数格式
+            'mixed_format': r'^(.+?)第(\d{1,3})[集期话]\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+
+            # 标准格式带中文描述 (深情眼 - S01E11 - 第 11 集.mkv)
+            'standard_with_chinese': r'^(.+?)\s*-\s*[Ss](\d{1,2})[Ee](\d{1,3})\s*-\s*第\s*(\d+)\s*[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+
+            # 剧名+数字格式 (深情眼01.mkv, 剧集名02.mp4)
+            'title_number': r'^([^\d]+)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
 
             # 日期格式 (20231225.mp4, 2023-12-25.mp4)
             'date_format': r'^(\d{4}[-_]?\d{2}[-_]?\d{2})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
@@ -231,12 +237,48 @@ class MediaAnalyzer:
         elif pattern_name == 'mixed_format':
             # 混合格式: 剧名01.mp4, 剧名第1集.mp4
             title_part = match.group(1).strip()
+            # 清理标题中的多余点号
+            title_part = re.sub(r'\.+$', '', title_part)  # 移除结尾的点号
             episode_num = int(match.group(2))
             result.update({
                 'episode': episode_num,
                 'title': title_part or context.get('series_title', "Unknown Series"),
                 'season': context.get('season', 1),
                 'extension': f".{match.group(3)}"
+            })
+
+        elif pattern_name == 'standard_with_chinese':
+            # 标准格式带中文描述: 深情眼 - S01E11 - 第 11 集.mkv
+            title_part = match.group(1).strip()
+            season_num = int(match.group(2))
+            episode_num = int(match.group(3))
+            chinese_episode = int(match.group(4))  # 中文集数，用于验证
+            extension = f".{match.group(5)}"
+
+            # 验证标准格式的集数和中文集数是否一致
+            if episode_num != chinese_episode:
+                logger.warning(f"集数不一致: S{season_num:02d}E{episode_num:02d} vs 第{chinese_episode}集")
+
+            result.update({
+                'title': title_part,
+                'season': season_num,
+                'episode': episode_num,
+                'extension': extension,
+                'media_type': MediaType.TV_SERIES
+            })
+
+        elif pattern_name == 'title_number':
+            # 剧名+数字格式: 深情眼01.mkv, 剧集名02.mp4
+            title_part = match.group(1).strip()
+            episode_num = int(match.group(2))
+            extension = f".{match.group(3)}"
+
+            result.update({
+                'title': title_part,
+                'season': context.get('season', 1),
+                'episode': episode_num,
+                'extension': extension,
+                'media_type': MediaType.TV_SERIES
             })
 
         elif pattern_name == 'date_format':
@@ -328,29 +370,32 @@ class MediaAnalyzer:
         """提取标题 - 智能识别主标题"""
         # 移除年份、季集信息、画质等技术信息
         title = clean_name
-        
+
         # 移除年份
         title = re.sub(r'\b(19|20)\d{2}\b', '', title)
-        
+
         # 移除季集信息
-        title = re.sub(r'\b[Ss]\d{1,2}[Ee]\d{1,3}\b', '', title)
-        title = re.sub(r'第\s*\d+\s*[季集期话]\b', '', title)
-        title = re.sub(r'\b(Season|Episode)\s*\d+\b', '', title, flags=re.IGNORECASE)
-        
+        title = re.sub(r'[\.\s]*[Ss]\d{1,2}[Ee]\d{1,3}[\.\s]*', '', title)
+        title = re.sub(r'[\.\s]*第\s*\d+\s*[季集期话][\.\s]*', '', title)
+        title = re.sub(r'[\.\s]*(Season|Episode)\s*\d+[\.\s]*', '', title, flags=re.IGNORECASE)
+
         # 移除画质信息
         for pattern in self.quality_patterns.keys():
             title = re.sub(pattern, '', title, flags=re.IGNORECASE)
-        
+
         # 移除来源信息
         for source in self.source_patterns:
             title = re.sub(rf'\b{re.escape(source)}\b', '', title, flags=re.IGNORECASE)
-        
+
         # 移除编码信息
         for codec in self.codec_patterns:
             title = re.sub(rf'\b{re.escape(codec)}\b', '', title, flags=re.IGNORECASE)
-        
-        # 清理并返回
-        title = re.sub(r'\s+', ' ', title).strip()
+
+        # 移除多余的点号和空格
+        title = re.sub(r'\.+', '.', title)  # 多个点号合并为一个
+        title = re.sub(r'^\.|\.+$', '', title)  # 移除开头和结尾的点号
+        title = re.sub(r'\s+', ' ', title).strip()  # 多个空格合并为一个
+
         return title if title else "Unknown"
     
     def _extract_year(self, clean_name: str) -> Optional[int]:
@@ -758,6 +803,15 @@ class MediaFormatter:
             MediaType.ANIME: "{title}.第{episode:02d}话.{extension}"
         }
 
+        # 中文描述模板（包含中文集数描述）
+        self.chinese_templates = {
+            MediaType.TV_SERIES: "{title} - S{season:02d}E{episode:02d} - 第 {episode} 集.{extension}",
+            MediaType.MOVIE: "{title} - {year}年.{extension}",
+            MediaType.VARIETY_SHOW: "{title} - 第{episode}期.{extension}",
+            MediaType.DOCUMENTARY: "{title} - 纪录片.{extension}",
+            MediaType.ANIME: "{title} - 第{episode:02d}话.{extension}"
+        }
+
         # 用户自定义模板存储
         self.custom_templates = {}
 
@@ -790,6 +844,8 @@ class MediaFormatter:
             template = self.custom_templates[style]
         elif style == "simple":
             template = self.simple_templates.get(media_info.media_type, self.simple_templates[MediaType.MOVIE])
+        elif style == "chinese":
+            template = self.chinese_templates.get(media_info.media_type, self.chinese_templates[MediaType.MOVIE])
         else:
             template = self.templates.get(media_info.media_type, self.templates[MediaType.MOVIE])
 
@@ -807,6 +863,58 @@ class MediaFormatter:
         except KeyError as e:
             logger.warning(f"格式化失败，缺少参数: {e}")
             return self._fallback_format(media_info)
+
+    def _prepare_format_params(self, media_info: MediaInfo) -> Dict[str, Any]:
+        """准备格式化参数"""
+        params = {
+            'title': media_info.title or "Unknown",
+            'year': media_info.year or "",
+            'season': media_info.season or 1,
+            'episode': media_info.episode or 1,
+            'quality': media_info.quality.value if media_info.quality != QualityLevel.UNKNOWN else "",
+            'source': media_info.source or "",
+            'codec': media_info.codec or "",
+            'audio': media_info.audio or "",
+            'language': media_info.language or "",
+            'subtitle': media_info.subtitle or "",
+            'group': media_info.group or "",
+            'extension': media_info.extension.lstrip('.') or "mp4"
+        }
+
+        # 处理日期相关参数（用于综艺节目）
+        if media_info.media_type == MediaType.VARIETY_SHOW:
+            # 这里可以根据需要添加日期解析逻辑
+            params.update({
+                'month': 1,
+                'day': 1
+            })
+
+        return params
+
+    def _clean_formatted_name(self, name: str) -> str:
+        """清理格式化后的文件名"""
+        # 移除多余的点号
+        name = re.sub(r'\.{2,}', '.', name)
+
+        # 移除开头和结尾的点号
+        name = name.strip('.')
+
+        # 移除空的部分（如 ..mp4 变成 .mp4）
+        name = re.sub(r'\.\s*\.', '.', name)
+
+        return name
+
+    def _fallback_format(self, media_info: MediaInfo) -> str:
+        """备用格式化方案"""
+        title = media_info.title or "Unknown"
+        ext = media_info.extension.lstrip('.') or "mp4"
+
+        if media_info.season and media_info.episode:
+            return f"{title}.S{media_info.season:02d}E{media_info.episode:02d}.{ext}"
+        elif media_info.year:
+            return f"{title}.{media_info.year}.{ext}"
+        else:
+            return f"{title}.{ext}"
 
 class CustomTemplateManager:
     """自定义模板管理器 - 管理用户的自定义重命名模板"""
@@ -1062,14 +1170,23 @@ class CustomTemplateManager:
         """验证模板格式"""
         try:
             # 创建测试参数
-            test_params = {var: f"test_{var}" for var in self.available_variables.keys()}
-            test_params.update({
+            test_params = {
+                'title': 'Test Title',
                 'season': 1,
                 'episode': 1,
                 'year': 2023,
+                'quality': '1080p',
+                'source': 'WEB-DL',
+                'codec': 'H264',
+                'audio': 'AAC',
+                'language': 'chinese',
+                'subtitle': '中字',
+                'group': 'TestGroup',
+                'extension': 'mp4',
                 'month': 12,
-                'day': 25
-            })
+                'day': 25,
+                'episode_title': 'Test Episode'
+            }
 
             # 尝试格式化
             template.format(**test_params)
@@ -1080,68 +1197,15 @@ class CustomTemplateManager:
 
     def get_available_variables(self) -> Dict[str, str]:
         """获取可用的模板变量"""
-        return self.available_variables.copy()
+        return self.get_template_variables()
 
-    def preview_template(self, template: str, media_info: MediaInfo) -> str:
+    def preview_template(self, template: str, sample_data: Dict[str, Any]) -> str:
         """预览模板效果"""
         try:
-            format_params = self._prepare_format_params(media_info)
-            formatted_name = template.format(**format_params)
-            return self._clean_formatted_name(formatted_name)
+            formatted_name = template.format(**sample_data)
+            return formatted_name
         except Exception as e:
             return f"预览失败: {str(e)}"
-
-    def _prepare_format_params(self, media_info: MediaInfo) -> Dict[str, Any]:
-        """准备格式化参数"""
-        params = {
-            'title': media_info.title or "Unknown",
-            'year': media_info.year or "",
-            'season': media_info.season or 1,
-            'episode': media_info.episode or 1,
-            'quality': media_info.quality.value if media_info.quality != QualityLevel.UNKNOWN else "",
-            'source': media_info.source or "",
-            'codec': media_info.codec or "",
-            'audio': media_info.audio or "",
-            'language': media_info.language or "",
-            'subtitle': media_info.subtitle or "",
-            'group': media_info.group or "",
-            'extension': media_info.extension.lstrip('.') or "mp4"
-        }
-
-        # 处理日期相关参数（用于综艺节目）
-        if media_info.media_type == MediaType.VARIETY_SHOW:
-            # 这里可以根据需要添加日期解析逻辑
-            params.update({
-                'month': 1,
-                'day': 1
-            })
-
-        return params
-
-    def _clean_formatted_name(self, name: str) -> str:
-        """清理格式化后的文件名"""
-        # 移除多余的点号
-        name = re.sub(r'\.{2,}', '.', name)
-
-        # 移除开头和结尾的点号
-        name = name.strip('.')
-
-        # 移除空的部分（如 ..mp4 变成 .mp4）
-        name = re.sub(r'\.\s*\.', '.', name)
-
-        return name
-
-    def _fallback_format(self, media_info: MediaInfo) -> str:
-        """备用格式化方案"""
-        title = media_info.title or "Unknown"
-        ext = media_info.extension.lstrip('.') or "mp4"
-
-        if media_info.season and media_info.episode:
-            return f"{title}.S{media_info.season:02d}E{media_info.episode:02d}.{ext}"
-        elif media_info.year:
-            return f"{title}.{media_info.year}.{ext}"
-        else:
-            return f"{title}.{ext}"
 
 class MediaRenamer:
     """媒体重命名器 - 主要的重命名引擎，支持自定义模板"""
@@ -1152,6 +1216,10 @@ class MediaRenamer:
         self.batch_renamer = SmartBatchRenamer()
         self.template_manager = CustomTemplateManager()
         self.rename_history: List[Dict[str, str]] = []
+
+    def analyze_filename(self, filename: str, context: Dict[str, Any] = None) -> MediaInfo:
+        """分析文件名，提取媒体信息（API兼容性方法）"""
+        return self.analyzer.analyze(filename, context or {})
 
     def rename_file(self, filename: str, style: str = "standard", custom_title: str = None,
                    custom_template: str = None) -> str:
@@ -1393,3 +1461,5 @@ class SmartRenameEngine:
     def apply_text_pattern(self, pattern_key: str, replacement: str, filename: str) -> Tuple[str, str]:
         """应用文本模式 - 兼容旧API"""
         return pattern_key, replacement
+
+
