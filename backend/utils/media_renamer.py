@@ -34,6 +34,8 @@ class MediaInfo:
     season: Optional[int] = None
     episode: Optional[int] = None
     episode_title: str = ""
+    base_episode: Optional[int] = None  # 综艺节目的原始期数（如第8期的8）
+    part_suffix: str = ""  # 综艺节目的上中下标识
     quality: QualityLevel = QualityLevel.UNKNOWN
     source: str = ""  # WEB-DL, BluRay, HDTV等
     codec: str = ""   # H264, H265, x264等
@@ -97,38 +99,57 @@ class MediaAnalyzer:
             '简体', '繁体', '中英', '多语'
         ]
 
-        # 不规范文件名的处理策略
-        self.irregular_patterns = {
+        # 不规范文件名的处理策略 - 按优先级排序，更具体的模式在前
+        # 使用 OrderedDict 确保匹配顺序
+        from collections import OrderedDict
+        self.irregular_patterns = OrderedDict([
             # 纯数字文件名 (1.mp4, 01.mp4, 001.mp4)
-            'pure_number': r'^(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('pure_number', r'^(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+
+            # 通用集数+画质格式 - 支持各种分隔符和集数标识
+            # 匹配: 前缀[分隔符]集数标识[分隔符]画质[分隔符后缀].扩展名
+            # 例如: 萨达卡斯柯 E01 4k.mp4, show+02+1080p.mp4, series-S01E03-720p-final.mp4
+            ('universal_episode_quality', r'^(.+?)[\s\-_+.]*(?:S\d{1,2})?[Ee]?(\d{1,3})[\s\-_+.]*(?:1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+
+            # 更精确的通用模式 - 分别捕获画质
+            ('universal_episode_quality_precise', r'^(.+?)[\s\-_+.]*(?:S\d{1,2})?[Ee]?(\d{1,3})[\s\-_+.]*(1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+
+            # 综艺节目日期+期数格式 - 超宽泛匹配（优化版）
+            # 支持: saa.24.02.22.第9期.mp4, show 25 03 14第十期.mp4, prefix-2025.03.14-第8期中.mp4 等
+            # 匹配任意前缀 + 日期(各种分隔符) + 期数
+            ('variety_date_episode', r'^[^第]*?(\d{2,4})[\s.\-_/]*(\d{1,2})[\s.\-_/]*(\d{1,2})[\s.\-_/]*第([一二三四五六七八九十百千万\d]{1,10})[期话]([上中下]?)[^.]*\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+
+            # 综艺节目日期+特殊版本 - 超宽泛匹配（优化版）
+            # 支持: saa.25.03.14纯享版.mp4, show 2025 06 14花絮版.mp4 等
+            ('variety_date_special', r'^[^纯花幕加完精未]*?(\d{2,4})[\s.\-_/]*(\d{1,2})[\s.\-_/]*(\d{1,2})[\s.\-_/]*(纯享版|花絮版|幕后版|加更版|完整版|精华版|未删减版)[^.]*\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 简单数字+扩展名 (第1集.mp4, 第01集.mp4, 第001集.mp4)
-            'simple_episode': r'^第?(\d{1,3})[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('simple_episode', r'^第?(\d{1,3})[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 中文数字 (一.mp4, 第一集.mp4)
-            'chinese_number': r'^第?([一二三四五六七八九十百]+)[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('chinese_number', r'^第?([一二三四五六七八九十百]+)[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 英文序号 (Episode1.mp4, EP01.mp4, E01.mp4)
-            'english_episode': r'^(Episode|EP|E)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
-
-            # 混合格式 (剧名01.mp4, 剧名第1集.mp4) - 只匹配真正的中文集数格式
-            'mixed_format': r'^(.+?)第(\d{1,3})[集期话]\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('english_episode', r'^(Episode|EP|E)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 标准格式带中文描述 (深情眼 - S01E11 - 第 11 集.mkv)
-            'standard_with_chinese': r'^(.+?)\s*-\s*[Ss](\d{1,2})[Ee](\d{1,3})\s*-\s*第\s*(\d+)\s*[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('standard_with_chinese', r'^(.+?)\s*-\s*[Ss](\d{1,2})[Ee](\d{1,3})\s*-\s*第\s*(\d+)\s*[集期话]?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+
+            # 混合格式 (剧名01.mp4, 剧名第1集.mp4) - 只匹配真正的中文集数格式
+            ('mixed_format', r'^(.+?)第(\d{1,3})[集期话]\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 剧名+数字格式 (深情眼01.mkv, 剧集名02.mp4)
-            'title_number': r'^([^\d]+)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('title_number', r'^([^\d]+)(\d{1,3})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 日期格式 (20231225.mp4, 2023-12-25.mp4)
-            'date_format': r'^(\d{4}[-_]?\d{2}[-_]?\d{2})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('date_format', r'^(\d{4}[-_]?\d{2}[-_]?\d{2})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 时间戳格式 (20231225_1400.mp4)
-            'timestamp_format': r'^(\d{4}[-_]?\d{2}[-_]?\d{2}[-_]?\d{4})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$',
+            ('timestamp_format', r'^(\d{4}[-_]?\d{2}[-_]?\d{2}[-_]?\d{4})\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
-            # 随机字符 (abc123.mp4, random_name.mp4)
-            'random_name': r'^([a-zA-Z0-9_\-]+)\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'
-        }
+            # 随机字符 (abc123.mp4, random_name.mp4) - 最后匹配，避免误匹配标准格式
+            ('random_name', r'^([a-zA-Z0-9_\-]+)\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$')
+        ])
 
         # 中文数字映射
         self.chinese_numbers = {
@@ -203,6 +224,127 @@ class MediaAnalyzer:
                 'extension': f".{match.group(2)}"
             })
 
+        elif pattern_name in ['universal_episode_quality', 'universal_episode_quality_precise']:
+            # 通用集数+画质格式处理
+            # 支持各种分隔符: 萨达卡斯柯 E01 4k.mp4, show+02+1080p.mp4, series-S01E03-720p.mp4
+
+            if pattern_name == 'universal_episode_quality_precise':
+                # 精确模式，分别捕获画质
+                prefix = match.group(1).strip()
+                episode_num = int(match.group(2))
+                quality_str = match.group(3)
+                extension = f".{match.group(4)}"
+            else:
+                # 基础模式，需要重新解析画质
+                prefix = match.group(1).strip()
+                episode_num = int(match.group(2))
+                extension = f".{match.group(3)}"
+                # 从原始文件名中提取画质
+                quality_match = re.search(r'(1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)', match.group(0), re.IGNORECASE)
+                quality_str = quality_match.group(1) if quality_match else 'UNKNOWN'
+
+            # 映射画质标识到QualityLevel枚举 (不区分大小写)
+            quality_mapping = {
+                '4k': QualityLevel.UHD, '4K': QualityLevel.UHD,
+                '2160p': QualityLevel.UHD,
+                'uhd': QualityLevel.UHD, 'UHD': QualityLevel.UHD,
+                '1080p': QualityLevel.FHD,
+                'fhd': QualityLevel.FHD, 'FHD': QualityLevel.FHD,
+                '720p': QualityLevel.HD,
+                'hd': QualityLevel.HD, 'HD': QualityLevel.HD,
+                '480p': QualityLevel.SD,
+                'sd': QualityLevel.SD, 'SD': QualityLevel.SD
+            }
+
+            # 如果有自定义标题，使用自定义标题；否则尝试从前缀推断
+            title = context.get('series_title')
+            if not title:
+                # 清理前缀作为标题 - 移除各种分隔符和集数标识
+                clean_prefix = re.sub(r'[\s\-_+.]*(?:S\d{1,2})?[Ee]?\d{1,3}.*$', '', prefix, flags=re.IGNORECASE)
+                title = clean_prefix.replace('_', ' ').replace('-', ' ').replace('+', ' ').strip()
+                if not title or len(title) < 2:
+                    title = f"Series_{episode_num:02d}"
+
+            result.update({
+                'episode': episode_num,
+                'title': title,
+                'season': context.get('season', 1),
+                'quality': quality_mapping.get(quality_str.lower(), QualityLevel.UNKNOWN),
+                'extension': extension
+            })
+
+        elif pattern_name == 'variety_date_episode':
+            # 综艺节目日期+期数格式: saa.24.02.22.第9期.mp4, show 25 03 14第十期.mp4
+            year_str = match.group(1)
+            month_str = match.group(2)
+            day_str = match.group(3)
+            episode_str = match.group(4)  # 可能是数字或中文数字
+            part_indicator = match.group(5)  # 上中下
+            extension = f".{match.group(6)}"
+
+            # 处理期数：支持阿拉伯数字和中文数字
+            if episode_str.isdigit():
+                # 阿拉伯数字
+                base_episode_num = int(episode_str)
+            else:
+                # 中文数字，使用现有的转换方法
+                base_episode_num = self._convert_chinese_number(episode_str)
+
+            # 保留原始期数，不做特殊计算
+            episode_num = base_episode_num
+            part_suffix = part_indicator  # 直接保留上中下标识
+
+            # 解析日期信息
+            # 处理两位年份
+            if len(year_str) == 2:
+                year = 2000 + int(year_str)
+            else:
+                year = int(year_str)
+            month = int(month_str)
+            day = int(day_str)
+
+            result.update({
+                'episode': episode_num,
+                'title': context.get('series_title', "Variety Show"),
+                'season': context.get('season', 1),
+                'media_type': MediaType.TV_SERIES,  # 综艺按剧集处理
+                'year': year,
+                'extension': extension,
+                'base_episode': base_episode_num,  # 保存原始期数
+                'part_suffix': part_suffix  # 保存上中下标识
+            })
+
+        elif pattern_name == 'variety_date_special':
+            # 综艺节目日期+特殊版本: saa.25.06.14纯享版.mp4, show 2025 07 15花絮版.mp4
+            year_str = match.group(1)
+            month_str = match.group(2)
+            day_str = match.group(3)
+            special_type = match.group(4)
+            extension = f".{match.group(5)}"
+
+            # 解析日期信息
+            # 处理两位年份
+            if len(year_str) == 2:
+                year = 2000 + int(year_str)
+            else:
+                year = int(year_str)
+            month = int(month_str)
+            day = int(day_str)
+
+            # 特殊版本不设置集数，保留版本标识
+            episode_num = None  # 特殊版本没有集数概念
+
+            result.update({
+                'episode': episode_num,  # None for special versions
+                'title': context.get('series_title', "Variety Show"),
+                'season': context.get('season', 1),
+                'media_type': MediaType.TV_SERIES,  # 综艺按剧集处理
+                'year': year,
+                'extension': extension,
+                'base_episode': None,  # 特殊版本没有原始期数
+                'part_suffix': special_type  # 将特殊版本标识保存到part_suffix
+            })
+
         elif pattern_name == 'simple_episode':
             # 简单集数: 第1集.mp4, 第01集.mp4
             episode_num = int(match.group(1))
@@ -236,7 +378,7 @@ class MediaAnalyzer:
 
         elif pattern_name == 'mixed_format':
             # 混合格式: 剧名01.mp4, 剧名第1集.mp4
-            title_part = match.group(1).strip()
+            title_part = match.group(1).strip() 
             # 清理标题中的多余点号
             title_part = re.sub(r'\.+$', '', title_part)  # 移除结尾的点号
             episode_num = int(match.group(2))
@@ -315,6 +457,12 @@ class MediaAnalyzer:
         elif pattern_name == 'random_name':
             # 随机命名: abc123.mp4, random_name.mp4
             random_name = match.group(1)
+
+            # 检查是否包含标准季集格式，如果是则不应该被random_name处理
+            if re.search(r'[Ss]\d{1,2}[Ee]\d{1,3}', random_name):
+                # 包含标准格式，返回None让其进入标准处理流程
+                return None
+
             # 尝试从文件名中提取数字作为集数
             numbers = re.findall(r'\d+', random_name)
             episode_num = int(numbers[-1]) if numbers else 1
@@ -406,8 +554,8 @@ class MediaAnalyzer:
             return int(matches[0])
         return None
     
-    def _extract_season_episode(self, clean_name: str) -> Tuple[Optional[int], Optional[int]]:
         """提取季数和集数"""
+    def _extract_season_episode(self, clean_name: str) -> Tuple[Optional[int], Optional[int]]:
         season, episode = None, None
         
         # 标准格式 S01E01
@@ -716,7 +864,7 @@ class SmartBatchRenamer:
                     media_info.episode = i
 
                 # 格式化新文件名
-                new_filename = self.formatter.format(media_info, "simple")
+                new_filename = self.formatter.format(media_info, template_name="simple")
 
                 results.append({
                     'original': filename,
@@ -742,7 +890,8 @@ class SmartBatchRenamer:
         return results
 
     def preview_batch_rename(self, filenames: List[str], directory_path: str = "",
-                           custom_title: str = None, custom_season: int = None) -> Dict[str, Any]:
+                           custom_title: str = None, custom_season: int = None,
+                           style: str = "simple") -> Dict[str, Any]:
         """预览批量重命名结果"""
         context = self.context_inferrer.infer_context(filenames, directory_path)
 
@@ -762,7 +911,7 @@ class SmartBatchRenamer:
                 if not media_info.episode:
                     media_info.episode = i
 
-                new_filename = self.formatter.format(media_info, "simple")
+                new_filename = self.formatter.format(media_info, template_name=style)
 
                 preview_results.append({
                     'original': filename,
@@ -781,6 +930,44 @@ class SmartBatchRenamer:
             'showing': min(5, len(filenames))
         }
 
+    def preview_batch_rename_with_template(self, filenames: List[str], template: str,
+                                         directory_path: str = "", custom_title: str = None) -> Dict[str, Any]:
+        """使用指定模板预览批量重命名结果"""
+        context = self.context_inferrer.infer_context(filenames, directory_path)
+
+        if custom_title:
+            context['series_title'] = custom_title
+
+        preview_results = []
+
+        for i, filename in enumerate(filenames[:5], 1):  # 只预览前5个
+            file_context = context.copy()
+            file_context['file_index'] = i
+
+            try:
+                media_info = self.analyzer.analyze(filename, file_context)
+                if not media_info.episode:
+                    media_info.episode = i
+
+                new_filename = self.formatter.format(media_info, custom_template=template)
+
+                preview_results.append({
+                    'original': filename,
+                    'renamed': new_filename
+                })
+            except Exception as e:
+                preview_results.append({
+                    'original': filename,
+                    'renamed': f"错误: {str(e)}"
+                })
+
+        return {
+            'context': context,
+            'preview': preview_results,
+            'total_files': len(filenames),
+            'showing': min(5, len(filenames))
+        }
+
 class MediaFormatter:
     """媒体文件格式化器 - 根据不同类型生成标准化文件名，支持自定义模板"""
 
@@ -789,7 +976,7 @@ class MediaFormatter:
         self.templates = {
             MediaType.TV_SERIES: "{title}.S{season:02d}E{episode:02d}.{quality}.{source}.{codec}.{extension}",
             MediaType.MOVIE: "{title}.{year}.{quality}.{source}.{codec}.{extension}",
-            MediaType.VARIETY_SHOW: "{title}.{year}{month:02d}{day:02d}.第{episode}期.{quality}.{extension}",
+            MediaType.VARIETY_SHOW: "{title}.{year}{month:02d}{day:02d}.第{base_episode}期{part_suffix}.{quality}.{extension}",
             MediaType.DOCUMENTARY: "{title}.{year}.{quality}.{source}.{extension}",
             MediaType.ANIME: "{title}.第{episode:02d}话.{quality}.{extension}"
         }
@@ -798,7 +985,7 @@ class MediaFormatter:
         self.simple_templates = {
             MediaType.TV_SERIES: "{title}.S{season:02d}E{episode:02d}.{extension}",
             MediaType.MOVIE: "{title}.{year}.{extension}",
-            MediaType.VARIETY_SHOW: "{title}.第{episode}期.{extension}",
+            MediaType.VARIETY_SHOW: "{title}.第{base_episode}期{part_suffix}.{extension}",
             MediaType.DOCUMENTARY: "{title}.{extension}",
             MediaType.ANIME: "{title}.第{episode:02d}话.{extension}"
         }
@@ -807,7 +994,7 @@ class MediaFormatter:
         self.chinese_templates = {
             MediaType.TV_SERIES: "{title} - S{season:02d}E{episode:02d} - 第 {episode} 集.{extension}",
             MediaType.MOVIE: "{title} - {year}年.{extension}",
-            MediaType.VARIETY_SHOW: "{title} - 第{episode}期.{extension}",
+            MediaType.VARIETY_SHOW: "{title} - 第{base_episode}期{part_suffix}.{extension}",
             MediaType.DOCUMENTARY: "{title} - 纪录片.{extension}",
             MediaType.ANIME: "{title} - 第{episode:02d}话.{extension}"
         }
@@ -834,20 +1021,24 @@ class MediaFormatter:
             'episode_title': '集标题'
         }
 
-    def format(self, media_info: MediaInfo, style: str = "standard", custom_template: str = None) -> str:
+    def format(self, media_info: MediaInfo, template_name: str = "standard", custom_template: str = None) -> str:
         """格式化媒体文件名"""
         # 如果提供了自定义模板，优先使用
         if custom_template:
             template = custom_template
-        elif style in self.custom_templates:
+        elif template_name in self.custom_templates:
             # 使用用户保存的自定义模板
-            template = self.custom_templates[style]
-        elif style == "simple":
-            template = self.simple_templates.get(media_info.media_type, self.simple_templates[MediaType.MOVIE])
-        elif style == "chinese":
-            template = self.chinese_templates.get(media_info.media_type, self.chinese_templates[MediaType.MOVIE])
+            template = self.custom_templates[template_name]
         else:
-            template = self.templates.get(media_info.media_type, self.templates[MediaType.MOVIE])
+            # 使用预定义模板
+            template = self._get_predefined_template(template_name, media_info.media_type)
+
+        # 特殊处理综艺节目的特殊版本（如纯享版、花絮版等）
+        if (media_info.media_type == MediaType.VARIETY_SHOW and
+            media_info.base_episode is None and
+            media_info.part_suffix):
+            # 特殊版本使用不同的模板
+            template = self._get_special_variety_template(template_name)
 
         # 准备格式化参数
         format_params = self._prepare_format_params(media_info)
@@ -878,7 +1069,9 @@ class MediaFormatter:
             'language': media_info.language or "",
             'subtitle': media_info.subtitle or "",
             'group': media_info.group or "",
-            'extension': media_info.extension.lstrip('.') or "mp4"
+            'extension': media_info.extension.lstrip('.') or "mp4",
+            'part_suffix': media_info.part_suffix or "",  # 上中下或特殊版本标识
+            'base_episode': media_info.base_episode or media_info.episode or 1  # 原始期数
         }
 
         # 处理日期相关参数（用于综艺节目）
@@ -889,7 +1082,66 @@ class MediaFormatter:
                 'day': 1
             })
 
+            # 处理特殊版本（如纯享版、花絮版等）
+            if media_info.base_episode is None and media_info.part_suffix:
+                # 特殊版本，使用特殊模板
+                params['base_episode'] = ""  # 不显示期数
+                # part_suffix 已经在上面设置了
+
         return params
+
+    def _get_predefined_template(self, template_name: str, media_type: MediaType) -> str:
+        """获取预定义模板"""
+        # 映射模板名称到实际模板
+        template_mapping = {
+            # 电视剧模板
+            "tv_standard": self.templates,
+            "tv_simple": self.simple_templates,
+            "tv_chinese": self.chinese_templates,
+            "tv_plex": self.templates,  # Plex使用标准模板
+            "tv_emby": self.templates,  # Emby使用标准模板
+
+            # 电影模板
+            "movie_standard": self.templates,
+            "movie_simple": self.simple_templates,
+            "movie_chinese": self.chinese_templates,
+            "movie_plex": self.templates,
+            "movie_emby": self.templates,
+
+            # 综艺模板
+            "variety_standard": self.templates,
+            "variety_simple": self.simple_templates,
+            "variety_chinese": self.chinese_templates,
+
+            # 纪录片模板
+            "documentary_standard": self.templates,
+            "documentary_simple": self.simple_templates,
+            "documentary_chinese": self.chinese_templates,
+
+            # 动漫模板
+            "anime_standard": self.templates,
+            "anime_simple": self.simple_templates,
+            "anime_chinese": self.chinese_templates,
+
+            # 向后兼容的旧风格名称
+            "standard": self.templates,
+            "simple": self.simple_templates,
+            "chinese": self.chinese_templates,
+            "plex": self.templates,
+            "emby": self.templates,
+        }
+
+        template_dict = template_mapping.get(template_name, self.templates)
+        return template_dict.get(media_type, template_dict[MediaType.MOVIE])
+
+    def _get_special_variety_template(self, template_name: str) -> str:
+        """获取综艺特殊版本模板"""
+        if "simple" in template_name:
+            return "{title}.{part_suffix}.{extension}"
+        elif "chinese" in template_name:
+            return "{title} - {part_suffix}.{extension}"
+        else:
+            return "{title}.{year}{month:02d}{day:02d}.{part_suffix}.{quality}.{extension}"
 
     def _clean_formatted_name(self, name: str) -> str:
         """清理格式化后的文件名"""
@@ -929,7 +1181,7 @@ class CustomTemplateManager:
             # 电视剧模板
             "tv_plex": "{title} - S{season:02d}E{episode:02d}.{extension}",
             "tv_emby": "{title}/Season {season:02d}/{title} S{season:02d}E{episode:02d}.{extension}",
-            "tv_simple": "{title}.第{episode}集.{extension}",
+            "tv_simple": "{title}.S{season:02d}E{episode:02d}.{extension}",
             "tv_detailed": "{title}.S{season:02d}E{episode:02d}.{year}.{quality}.{source}.{extension}",
             "tv_chinese": "{title}.第{season}季第{episode}集.{extension}",
 
@@ -1221,9 +1473,9 @@ class MediaRenamer:
         """分析文件名，提取媒体信息（API兼容性方法）"""
         return self.analyzer.analyze(filename, context or {})
 
-    def rename_file(self, filename: str, style: str = "standard", custom_title: str = None,
+    def rename_file(self, filename: str, template_name: str = "standard", custom_title: str = None,
                    custom_template: str = None) -> str:
-        """重命名单个文件"""
+        """重命名单个文件 - 使用模板"""
         # 分析媒体信息
         context = {'series_title': custom_title} if custom_title else {}
         media_info = self.analyzer.analyze(filename, context)
@@ -1234,14 +1486,15 @@ class MediaRenamer:
 
         # 格式化新文件名
         if custom_template:
-            new_filename = self.formatter.format(media_info, style, custom_template)
+            new_filename = self.formatter.format(media_info, template_name=template_name, custom_template=custom_template)
         else:
             # 检查是否为自定义模板名称
-            template = self.template_manager.get_template(style)
+            template = self.template_manager.get_template(template_name)
             if template:
-                new_filename = self.formatter.format(media_info, "standard", template)
+                new_filename = self.formatter.format(media_info, template_name=template_name, custom_template=template)
             else:
-                new_filename = self.formatter.format(media_info, style)
+                # 预设模板
+                new_filename = self.formatter.format(media_info, template_name=template_name)
 
         # 记录重命名历史
         self.rename_history.append({
@@ -1253,7 +1506,7 @@ class MediaRenamer:
 
         return new_filename
 
-    def batch_rename(self, filenames: List[str], style: str = "standard",
+    def batch_rename(self, filenames: List[str], template_name: str = "standard",
                     custom_title: str = None, directory_path: str = "") -> List[Dict[str, str]]:
         """批量重命名文件 - 使用智能上下文推断"""
         # 使用智能批量重命名器
@@ -1282,7 +1535,7 @@ class MediaRenamer:
         if custom_title:
             media_info.title = custom_title
 
-        new_filename = self.formatter.format(media_info, style)
+        new_filename = self.formatter.format(media_info, template_name=style)
 
         return {
             'original': filename,
@@ -1295,14 +1548,23 @@ class MediaRenamer:
                 'episode': media_info.episode,
                 'quality': media_info.quality.value,
                 'source': media_info.source,
-                'codec': media_info.codec
+                'codec': media_info.codec,
+                'base_episode': media_info.base_episode,
+                'part_suffix': media_info.part_suffix
             }
         }
 
     def preview_batch_rename(self, filenames: List[str], directory_path: str = "",
-                           custom_title: str = None) -> Dict[str, Any]:
+                           custom_title: str = None, style: str = "standard",
+                           template_name: str = None) -> Dict[str, Any]:
         """预览批量重命名结果"""
-        return self.batch_renamer.preview_batch_rename(filenames, directory_path, custom_title)
+        if template_name:
+            template = self.template_manager.get_template(template_name)
+            if not template:
+                raise ValueError(f"模板不存在: {template_name}")
+            return self.batch_renamer.preview_batch_rename_with_template(filenames, template, directory_path, custom_title)
+        else:
+            return self.batch_renamer.preview_batch_rename(filenames, directory_path, custom_title, None, style)
 
     def get_rename_history(self) -> List[Dict[str, str]]:
         """获取重命名历史"""
@@ -1351,13 +1613,357 @@ class MediaRenamer:
         """获取可用的模板变量"""
         return self.template_manager.get_template_variables()
 
+    def start_magic_is_save(self, start_magic: List, filename: str) -> bool:
+        """判断文件是否应该保存（基于集数、季数等条件）"""
+        try:
+            # 分析文件获取媒体信息
+            media_info = self.analyzer.analyze(filename)
+
+            for magic_rule in start_magic:
+                if not magic_rule:
+                    continue
+
+                # 支持字典格式和字符串格式
+                if isinstance(magic_rule, dict):
+                    # 新的字典格式: {'type': '{E}', 'symbol': '>', 'value': 90}
+                    rule_type = magic_rule.get('type', '')
+                    symbol = magic_rule.get('symbol', '')
+                    value = magic_rule.get('value', 0)
+
+                    # 转换类型标识
+                    if rule_type == '{E}' or rule_type == 'episode':
+                        field = 'episode'
+                    elif rule_type == '{S}' or rule_type == 'season':
+                        field = 'season'
+                    else:
+                        continue
+
+                    # 检查条件
+                    if self._check_magic_condition(media_info, field, symbol, value):
+                        return True
+
+                elif isinstance(magic_rule, str):
+                    # 旧的字符串格式: "episode>90"
+                    if self._check_string_magic_rule(media_info, magic_rule):
+                        return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"start_magic_is_save 解析失败: {e}")
+            return True  # 默认保存
+
+    def _check_magic_condition(self, media_info, field: str, symbol: str, value: int) -> bool:
+        """检查魔法条件"""
+        if field == 'episode' and media_info.episode:
+            episode = media_info.episode
+            if symbol == '>' and episode > value:
+                return True
+            elif symbol == '>=' and episode >= value:
+                return True
+            elif symbol == '<' and episode < value:
+                return True
+            elif symbol == '<=' and episode <= value:
+                return True
+            elif symbol == '=' and episode == value:
+                return True
+        elif field == 'season' and media_info.season:
+            season = media_info.season
+            if symbol == '>' and season > value:
+                return True
+            elif symbol == '>=' and season >= value:
+                return True
+            elif symbol == '<' and season < value:
+                return True
+            elif symbol == '<=' and season <= value:
+                return True
+            elif symbol == '=' and season == value:
+                return True
+        return False
+
+    def _check_string_magic_rule(self, media_info, magic_rule: str) -> bool:
+        """检查字符串格式的魔法规则"""
+        # 解析魔法规则，格式如: "season>=1", "episode<=10", "episode>5"
+        if ">=" in magic_rule:
+            field, value = magic_rule.split(">=", 1)
+            field, value = field.strip(), int(value.strip())
+            if field == "season" and media_info.season and media_info.season >= value:
+                return True
+            elif field == "episode" and media_info.episode and media_info.episode >= value:
+                return True
+        elif "<=" in magic_rule:
+            field, value = magic_rule.split("<=", 1)
+            field, value = field.strip(), int(value.strip())
+            if field == "season" and media_info.season and media_info.season <= value:
+                return True
+            elif field == "episode" and media_info.episode and media_info.episode <= value:
+                return True
+        elif ">" in magic_rule:
+            field, value = magic_rule.split(">", 1)
+            field, value = field.strip(), int(value.strip())
+            if field == "season" and media_info.season and media_info.season > value:
+                return True
+            elif field == "episode" and media_info.episode and media_info.episode > value:
+                return True
+        elif "<" in magic_rule:
+            field, value = magic_rule.split("<", 1)
+            field, value = field.strip(), int(value.strip())
+            if field == "season" and media_info.season and media_info.season < value:
+                return True
+            elif field == "episode" and media_info.episode and media_info.episode < value:
+                return True
+        elif "=" in magic_rule:
+            field, value = magic_rule.split("=", 1)
+            field, value = field.strip(), int(value.strip())
+            if field == "season" and media_info.season and media_info.season == value:
+                return True
+            elif field == "episode" and media_info.episode and media_info.episode == value:
+                return True
+
+        return False
+
+    def is_exists(self, filename: str, dir_name_list: List[str], ignore_extension: bool = False,
+                  check_renamed: bool = True, rename_template: str = "simple", task_name: str = "") -> bool:
+        """判断文件是否在目录列表中存在（包括原文件名和重命名后的文件名）"""
+        try:
+            # 检查原文件名是否存在
+            original_exists = self._check_filename_exists(filename, dir_name_list, ignore_extension)
+
+            if not check_renamed:
+                return original_exists
+
+            # 如果原文件名已存在，直接返回 True
+            if original_exists:
+                return True
+
+            # 智能重命名检查：双向检查
+            try:
+                # 1. 检查新文件重命名后是否与已存在文件匹配
+                renamed_filename = self.rename_file(filename, rename_template, task_name)
+                logger.debug(f'新文件重命名后: {renamed_filename} {dir_name_list}')
+                renamed_exists = self._check_filename_exists(renamed_filename, dir_name_list, ignore_extension)
+
+                if renamed_exists:
+                    return True
+
+                # 2. 检查已存在文件重命名后是否与新文件匹配（双向检查）
+                return self._check_existing_files_renamed(filename, dir_name_list, rename_template, task_name, ignore_extension)
+
+            except Exception as rename_error:
+                logger.warning(f"重命名检查失败: {rename_error}")
+                return False
+
+        except Exception as e:
+            logger.warning(f"is_exists 检查失败: {e}")
+            return False
+
+    def _check_filename_exists(self, filename: str, dir_name_list: List[str], ignore_extension: bool = False) -> bool:
+        """检查单个文件名是否在目录列表中存在"""
+        if ignore_extension:
+            # 忽略扩展名，只比较文件名主体
+            filename_base = Path(filename).stem
+            for dir_name in dir_name_list:
+                dir_name_base = Path(dir_name).stem
+                if filename_base.lower() == dir_name_base.lower():
+                    return True
+        else:
+            # 完整文件名比较
+            for dir_name in dir_name_list:
+                if filename.lower() == dir_name.lower():
+                    return True
+        return False
+
+    def _check_existing_files_renamed(self, target_filename: str, dir_name_list: List[str],
+                                     rename_template: str, task_name: str, ignore_extension: bool = False) -> bool:
+        """检查已存在文件重命名后是否与目标文件匹配（双向检查）"""
+        try:
+            # 分析目标文件的媒体信息
+            target_context = {'series_title': task_name} if task_name else {}
+            target_media_info = self.analyzer.analyze(target_filename, target_context)
+
+            # 遍历已存在的文件，检查它们重命名后是否与目标文件匹配
+            for existing_file in dir_name_list:
+                try:
+                    # 分析已存在文件的媒体信息
+                    existing_context = {'series_title': task_name} if task_name else {}
+                    existing_media_info = self.analyzer.analyze(existing_file, existing_context)
+
+                    # 检查是否是同一集内容
+                    if self._is_same_episode(target_media_info, existing_media_info):
+                        logger.debug(f'找到匹配的已存在文件: {existing_file} <-> {target_filename}')
+                        return True
+
+                except Exception as e:
+                    logger.debug(f"分析已存在文件失败 {existing_file}: {e}")
+                    continue
+
+            # 如果直接比较失败，尝试多种重命名模板进行匹配
+            return self._try_multiple_templates_match(target_filename, dir_name_list, task_name, ignore_extension)
+
+        except Exception as e:
+            logger.warning(f"双向检查失败: {e}")
+            return False
+
+    def _try_multiple_templates_match(self, target_filename: str, dir_name_list: List[str],
+                                    task_name: str, ignore_extension: bool = False) -> bool:
+        """尝试多种重命名模板进行匹配"""
+        try:
+            # 常用的重命名模板列表
+            common_templates = ['simple', 'standard', 'numbered', 'chinese']
+
+            # 分析目标文件
+            target_context = {'series_title': task_name} if task_name else {}
+            target_media_info = self.analyzer.analyze(target_filename, target_context)
+
+            if not target_media_info.episode:
+                return False
+
+            # 对每个已存在的文件，尝试用不同模板重命名后与目标文件比较
+            for existing_file in dir_name_list:
+                try:
+                    existing_context = {'series_title': task_name} if task_name else {}
+                    existing_media_info = self.analyzer.analyze(existing_file, existing_context)
+
+                    if not existing_media_info.episode:
+                        continue
+
+                    # 尝试不同的重命名模板
+                    for template in common_templates:
+                        try:
+                            # 将已存在文件用当前模板重命名
+                            renamed_existing = self.rename_file(existing_file, template, task_name)
+                            # 将目标文件用当前模板重命名
+                            renamed_target = self.rename_file(target_filename, template, task_name)
+
+                            # 比较重命名后的文件名
+                            if ignore_extension:
+                                renamed_existing_base = Path(renamed_existing).stem
+                                renamed_target_base = Path(renamed_target).stem
+                                if renamed_existing_base.lower() == renamed_target_base.lower():
+                                    logger.debug(f'通过模板 {template} 找到匹配: {existing_file} <-> {target_filename}')
+                                    return True
+                            else:
+                                if renamed_existing.lower() == renamed_target.lower():
+                                    logger.debug(f'通过模板 {template} 找到匹配: {existing_file} <-> {target_filename}')
+                                    return True
+
+                        except Exception as template_error:
+                            logger.debug(f"模板 {template} 重命名失败: {template_error}")
+                            continue
+
+                except Exception as file_error:
+                    logger.debug(f"处理文件 {existing_file} 失败: {file_error}")
+                    continue
+
+            return False
+
+        except Exception as e:
+            logger.warning(f"多模板匹配失败: {e}")
+            return False
+
+    def _is_same_episode(self, media_info1, media_info2) -> bool:
+        """判断两个媒体信息是否表示同一集内容"""
+        try:
+            # 检查标题是否相似（如果都有标题的话）
+            if media_info1.title and media_info2.title:
+                if media_info1.title.lower() != media_info2.title.lower():
+                    return False
+
+            # 检查媒体类型
+            if media_info1.media_type != media_info2.media_type:
+                return False
+
+            # 检查季数
+            if media_info1.season and media_info2.season:
+                if media_info1.season != media_info2.season:
+                    return False
+
+            # 检查集数（最重要的判断条件）
+            if media_info1.episode and media_info2.episode:
+                return media_info1.episode == media_info2.episode
+
+            # 如果集数信息不完整，返回 False（保守策略）
+            return False
+
+        except Exception as e:
+            logger.warning(f"比较媒体信息失败: {e}")
+            return False
+
+    def get_episodes(self, filename: str) -> Optional[int]:
+        """从文件名中提取集数"""
+        try:
+            media_info = self.analyzer.analyze(filename)
+            return media_info.episode
+        except Exception as e:
+            logger.warning(f"get_episodes 提取失败: {e}")
+            return None
+
+    def get_season(self, filename: str) -> Optional[int]:
+        """从文件名中提取季数"""
+        try:
+            media_info = self.analyzer.analyze(filename)
+            return media_info.season
+        except Exception as e:
+            logger.warning(f"get_season 提取失败: {e}")
+            return None
+
+    def process_filename(self, filename: str, template_name: str = "simple", task_name: str = "") -> Any:
+        """处理文件名 - 使用模板重命名"""
+        class ProcessResult:
+            def __init__(self, success: bool, new_name: str):
+                self.success = success
+                self.new_name = new_name
+
+        try:
+            # 使用模板重命名
+            if template_name in ['standard', 'simple', 'chinese', 'plex', 'emby']:
+                # 预设模板
+                new_name = self.rename_file(filename, template_name, task_name)
+            else:
+                # 自定义模板
+                new_name = self.rename_with_template(filename, template_name, task_name)
+            return ProcessResult(True, new_name)
+        except Exception as e:
+            logger.warning(f"process_filename 处理失败: {e}")
+            return ProcessResult(False, filename)
+
     def rename_with_template(self, filename: str, template_name: str, custom_title: str = None) -> str:
         """使用指定模板重命名文件"""
         template = self.template_manager.get_template(template_name)
         if not template:
             raise ValueError(f"模板不存在: {template_name}")
 
-        return self.rename_file(filename, custom_template=template, custom_title=custom_title)
+        return self.rename_file(filename, template_name="standard", custom_template=template, custom_title=custom_title)
+
+    def preview_with_template(self, filename: str, template_name: str, custom_title: str = None) -> Dict[str, Any]:
+        """使用指定模板预览重命名结果"""
+        template = self.template_manager.get_template(template_name)
+        if not template:
+            raise ValueError(f"模板不存在: {template_name}")
+
+        context = {'series_title': custom_title} if custom_title else {}
+        media_info = self.analyzer.analyze(filename, context)
+
+        if custom_title:
+            media_info.title = custom_title
+
+        new_filename = self.formatter.format(media_info, custom_template=template)
+
+        return {
+            'original': filename,
+            'renamed': new_filename,
+            'media_info': {
+                'title': media_info.title,
+                'media_type': media_info.media_type.value,
+                'year': media_info.year,
+                'season': media_info.season,
+                'episode': media_info.episode,
+                'quality': media_info.quality.value,
+                'source': media_info.source,
+                'codec': media_info.codec,
+                'base_episode': media_info.base_episode,
+                'part_suffix': media_info.part_suffix
+            }
+        }
 
 # 智能重命名建议器
 class SmartRenameSuggester:
@@ -1456,7 +2062,7 @@ class SmartRenameEngine:
 
     def transform_filename(self, pattern: str, replacement: str, filename: str) -> str:
         """转换文件名 - 兼容旧API"""
-        return self.renamer.rename_file(filename, "simple", self.task_name)
+        return self.renamer.rename_file(filename, template_name="simple", custom_title=self.task_name)
 
     def apply_text_pattern(self, pattern_key: str, replacement: str, filename: str) -> Tuple[str, str]:
         """应用文本模式 - 兼容旧API"""
