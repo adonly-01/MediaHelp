@@ -1,224 +1,320 @@
+import os
 import yaml
 import json
-import requests
+import asyncio
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Protocol
 from loguru import logger
-from dataclasses import dataclass, field
-from enum import Enum
-from concurrent.futures import ThreadPoolExecutor
-import time
+from utils.http_client import http_client
 
-class MessageType(Enum):
-    """消息类型枚举"""
-    INFO = "info"
-    SUCCESS = "success"
-    WARNING = "warning"
-    ERROR = "error"
 
-@dataclass
-class NotificationMessage:
-    """通知消息数据类"""
-    title: str
-    content: str
-    message_type: MessageType = MessageType.INFO
-    timestamp: float = field(default_factory=time.time)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class NotificationProvider(Protocol):
+    """通知提供者协议"""
 
-@dataclass
-class NotificationChannel:
-    """通知渠道配置"""
-    name: str
-    enabled: bool
-    config: Dict[str, Any]
-    handler: Optional[Callable] = None
+    async def send_message(self, title: str, content: str) -> bool:
+        """发送消息"""
+        ...
 
-class MessageDispatcher:
-    """
-    消息分发器 - 基于事件驱动的全新架构
-    使用观察者模式和异步处理，完全不同的实现思路
-    """
-    
-    def __init__(self):
-        self.channels: Dict[str, NotificationChannel] = {}
-        self.message_queue: List[NotificationMessage] = []
-        self.executor = ThreadPoolExecutor(max_workers=3)
-        self.config_store = ConfigurationStore()
-        self._initialize_channels()
-    
-    def _initialize_channels(self):
-        """初始化通知渠道"""
-        config = self.config_store.load_settings()
-        
-        # 注册控制台输出渠道
-        self.register_channel(
-            "console",
-            config.get("CONSOLE", True),
-            {},
-            self._handle_console_message
-        )
-        
-        # 注册企业微信渠道
-        self.register_channel(
-            "wecom",
-            bool(config.get("QYWX_KEY", "").strip()),
-            {"webhook_key": config.get("QYWX_KEY", "")},
-            self._handle_wecom_message
-        )
-    
-    def register_channel(self, name: str, enabled: bool, config: Dict[str, Any], handler: Callable):
-        """注册通知渠道"""
-        self.channels[name] = NotificationChannel(
-            name=name,
-            enabled=enabled,
-            config=config,
-            handler=handler
-        )
-    
-    def dispatch_message(self, message: NotificationMessage):
-        """分发消息到所有启用的渠道"""
-        active_channels = [ch for ch in self.channels.values() if ch.enabled and ch.handler]
-        
-        if not active_channels:
-            logger.warning("没有可用的通知渠道")
-            return
-        
-        # 使用线程池并发处理
-        futures = []
-        for channel in active_channels:
-            future = self.executor.submit(self._safe_send, channel, message)
-            futures.append(future)
-        
-        # 等待所有任务完成
-        for future in futures:
-            try:
-                future.result(timeout=30)
-            except Exception as e:
-                logger.error(f"通知发送超时或失败: {e}")
-    
-    def _safe_send(self, channel: NotificationChannel, message: NotificationMessage):
-        """安全发送消息，包含异常处理"""
+    def is_configured(self) -> bool:
+        """检查是否已配置"""
+        ...
+
+
+class BaseNotificationProvider(ABC):
+    """通知提供者基类"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+
+    @abstractmethod
+    async def send_message(self, title: str, content: str) -> bool:
+        """发送消息的抽象方法"""
+        pass
+
+    @abstractmethod
+    def is_configured(self) -> bool:
+        """检查配置的抽象方法"""
+        pass
+
+
+class WeChatWorkProvider(BaseNotificationProvider):
+    """企业微信通知提供者"""
+
+    def is_configured(self) -> bool:
+        return bool(self.config.get("wecom_webhook_key"))
+
+    async def send_message(self, title: str, content: str) -> bool:
         try:
-            channel.handler(message, channel.config)
-        except Exception as e:
-            logger.error(f"渠道 {channel.name} 发送失败: {e}")
-    
-    def _handle_console_message(self, message: NotificationMessage, config: Dict[str, Any]):
-        """处理控制台消息"""
-        emoji_map = {
-            MessageType.INFO: "📢",
-            MessageType.SUCCESS: "✅", 
-            MessageType.WARNING: "⚠️",
-            MessageType.ERROR: "❌"
-        }
-        emoji = emoji_map.get(message.message_type, "📢")
-        logger.info(f"\n{emoji} {message.title}\n\n{message.content}")
-    
-    def _handle_wecom_message(self, message: NotificationMessage, config: Dict[str, Any]):
-        """处理企业微信消息"""
-        webhook_key = config.get("webhook_key", "").strip()
-        if not webhook_key:
-            logger.warning("企业微信 webhook_key 未配置")
-            return
-        
-        url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
-        payload = {
-            "msgtype": "text",
-            "text": {
-                "content": f"{message.title}\n\n{message.content}"
+            webhook_key = self.config.get("wecom_webhook_key")
+            endpoint = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
+
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"{title}\n\n{content}"
+                }
             }
-        }
-        
-        response = requests.post(url, json=payload, timeout=15)
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("errcode") == 0:
-                logger.info("企业微信消息发送成功")
+
+            response = await http_client.post(endpoint, json=payload)
+
+            if isinstance(response, dict) and response.get("errcode") == 0:
+                logger.info("企业微信通知发送成功")
+                return True
             else:
-                logger.error(f"企业微信消息发送失败: {result.get('errmsg', '未知错误')}")
-        else:
-            logger.error(f"企业微信消息发送失败: HTTP {response.status_code}")
+                logger.error(f"企业微信通知发送失败: {response}")
+                return False
 
-class ConfigurationStore:
-    """配置存储器 - 基于文件的配置管理"""
-    
-    def __init__(self):
-        self.config_file = Path(__file__).parent.parent / "config" / "notify.yaml"
-        self.default_settings = {
-            "CONSOLE": True,
-            "QYWX_KEY": ""
-        }
-        self._ensure_config_exists()
-    
-    def _ensure_config_exists(self):
-        """确保配置文件存在"""
-        self.config_file.parent.mkdir(parents=True, exist_ok=True)
-        if not self.config_file.exists():
-            self.save_settings(self.default_settings)
-            logger.info(f"创建默认通知配置: {self.config_file}")
-    
-    def load_settings(self) -> Dict[str, Any]:
-        """加载配置设置"""
-        try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                settings = yaml.safe_load(f) or {}
-                # 合并默认设置
-                for key, value in self.default_settings.items():
-                    if key not in settings:
-                        settings[key] = value
-                return settings
         except Exception as e:
-            logger.error(f"加载配置失败: {e}")
-            return self.default_settings.copy()
-    
-    def save_settings(self, settings: Dict[str, Any]):
-        """保存配置设置"""
-        try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(settings, f, allow_unicode=True)
-            logger.info("通知配置已保存")
-        except Exception as e:
-            logger.error(f"保存配置失败: {e}")
+            logger.error(f"企业微信通知发送异常: {str(e)}")
+            return False
 
-class NotificationFacade:
-    """
-    通知门面类 - 提供简化的API接口
-    使用门面模式隐藏复杂的内部实现
-    """
-    
-    def __init__(self):
-        self.dispatcher = MessageDispatcher()
-        self.config_store = ConfigurationStore()
-    
-    def send(self, title: str, content: str, message_type: MessageType = MessageType.INFO):
-        """发送通知消息"""
-        if not content.strip():
-            logger.warning(f"通知内容为空: {title}")
-            return
-        
-        message = NotificationMessage(
-            title=title,
-            content=content,
-            message_type=message_type
+
+class TelegramProvider(BaseNotificationProvider):
+    """Telegram通知提供者"""
+
+    def is_configured(self) -> bool:
+        return bool(
+            self.config.get("telegram_bot_token") and
+            self.config.get("telegram_user_id")
         )
-        
-        self.dispatcher.dispatch_message(message)
+
+    async def send_message(self, title: str, content: str) -> bool:
+        try:
+            bot_token = self.config.get("telegram_bot_token")
+            user_id = self.config.get("telegram_user_id")
+            api_host = self.config.get("telegram_api_host")
+
+            # 构建API端点
+            if api_host:
+                endpoint = f"{api_host}/bot{bot_token}/sendMessage"
+            else:
+                endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+            payload = {
+                "chat_id": user_id,
+                "text": f"{title}\n\n{content}",
+                "parse_mode": "HTML"
+            }
+
+            response = await http_client.post(endpoint, json=payload)
+
+            if isinstance(response, dict) and response.get("ok"):
+                logger.info("Telegram通知发送成功")
+                return True
+            else:
+                logger.error(f"Telegram通知发送失败: {response}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Telegram通知发送异常: {str(e)}")
+            return False
+
+
+class NotificationProviderFactory:
+    """通知提供者工厂"""
+
+    _providers = {
+        "wechat_work": WeChatWorkProvider,
+        "telegram": TelegramProvider,
+    }
+
+    @classmethod
+    def create_provider(cls, provider_type: str, config: Dict[str, Any]) -> Optional[BaseNotificationProvider]:
+        """创建通知提供者实例"""
+        provider_class = cls._providers.get(provider_type)
+        if provider_class:
+            return provider_class(config)
+        return None
+
+    @classmethod
+    def get_available_providers(cls) -> List[str]:
+        """获取可用的通知提供者类型"""
+        return list(cls._providers.keys())
+
+
+class NotificationEvent:
+    """通知事件"""
+
+    def __init__(self, title: str, content: str, priority: str = "normal"):
+        self.title = title
+        self.content = content
+        self.priority = priority
+        self.timestamp = asyncio.get_event_loop().time()
+
+
+class NotificationManager:
+    """通知管理器 - 事件驱动架构"""
+
+    _instance = None
+    _config: Optional[Dict[str, Any]] = None
+    _providers: List[BaseNotificationProvider] = []
+    _event_queue: asyncio.Queue = None
     
+    # 配置模式定义
+    _config_schema = {
+        "wecom_webhook_key": {"type": str, "default": "", "description": "企业微信Webhook密钥"},
+        "telegram_bot_token": {"type": str, "default": "", "description": "Telegram机器人Token"},
+        "telegram_user_id": {"type": str, "default": "", "description": "Telegram用户ID"},
+        "telegram_api_host": {"type": str, "default": "", "description": "Telegram API地址"},
+    }
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(NotificationManager, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
+
+    def _initialize(self):
+        """初始化通知管理器"""
+        self.config_path = Path(__file__).parent.parent / "config" / "notification.yaml"
+        self._event_queue = asyncio.Queue()
+        self._ensure_config_directory()
+        self._load_configuration()
+        self._setup_providers()
+
+    def _ensure_config_directory(self) -> None:
+        """确保配置目录存在"""
+        config_dir = self.config_path.parent
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True, exist_ok=True)
+
+    def _load_configuration(self) -> None:
+        """加载配置文件"""
+        default_config = {key: schema["default"] for key, schema in self._config_schema.items()}
+
+        if not self.config_path.exists():
+            self._config = default_config
+            self._persist_configuration()
+        else:
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as file:
+                    loaded_config = yaml.safe_load(file) or {}
+                self._config = {**default_config, **loaded_config}
+            except Exception as e:
+                logger.error(f"配置加载失败: {e}")
+                self._config = default_config
+
+    def _persist_configuration(self) -> None:
+        """持久化配置到文件"""
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as file:
+                yaml.safe_dump(self._config, file, allow_unicode=True, sort_keys=False)
+        except Exception as e:
+            logger.error(f"配置保存失败: {e}")
+
+    def _setup_providers(self) -> None:
+        """设置通知提供者"""
+        self._providers = []
+
+        # 创建企业微信提供者
+        wechat_provider = NotificationProviderFactory.create_provider("wechat_work", self._config)
+        if wechat_provider and wechat_provider.is_configured():
+            self._providers.append(wechat_provider)
+
+        # 创建Telegram提供者
+        telegram_provider = NotificationProviderFactory.create_provider("telegram", self._config)
+        if telegram_provider and telegram_provider.is_configured():
+            self._providers.append(telegram_provider)
+
     def get_config(self) -> Dict[str, Any]:
-        """获取配置"""
-        return self.config_store.load_settings()
-    
-    def update_config(self, new_config: Dict[str, Any]):
+        """获取当前配置"""
+        return self._config.copy()
+
+    def update_config(self, new_config: Dict[str, Any]) -> None:
         """更新配置"""
-        current_config = self.config_store.load_settings()
-        current_config.update(new_config)
-        self.config_store.save_settings(current_config)
-        
-        # 重新初始化渠道
-        self.dispatcher._initialize_channels()
+        if self._config is None:
+            self._config = {}
 
-# 创建全局实例
-notify_manager = NotificationFacade()
+        # 验证并更新配置
+        for key, value in new_config.items():
+            if key in self._config_schema:
+                self._config[key] = value
 
-# 向后兼容性别名
-NotifyManager = NotificationFacade
+        self._persist_configuration()
+        self._setup_providers()  # 重新设置提供者
+        logger.info("通知配置更新完成")
+
+    async def dispatch_notification(self, title: str, content: str, priority: str = "normal") -> Dict[str, bool]:
+        """分发通知事件"""
+        if not content.strip():
+            logger.warning(f"通知内容为空，跳过发送: {title}")
+            return {}
+
+        # 创建通知事件
+        event = NotificationEvent(title, content, priority)
+
+        # 并发发送到所有配置的提供者
+        results = {}
+        if not self._providers:
+            logger.info("未配置任何通知提供者")
+            return results
+
+        # 使用asyncio.gather并发执行
+        tasks = []
+        provider_names = []
+
+        for provider in self._providers:
+            if provider.is_configured():
+                tasks.append(provider.send_message(event.title, event.content))
+                provider_names.append(provider.__class__.__name__)
+
+        if tasks:
+            try:
+                send_results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(send_results):
+                    provider_name = provider_names[i]
+                    if isinstance(result, Exception):
+                        logger.error(f"{provider_name} 发送失败: {result}")
+                        results[provider_name] = False
+                    else:
+                        results[provider_name] = result
+            except Exception as e:
+                logger.error(f"通知分发异常: {e}")
+
+        return results
+
+    async def send_notification(self, title: str, content: str) -> None:
+        """发送通知（异步接口）"""
+        await self.dispatch_notification(title, content)
+
+    def send(self, title: str, content: str) -> None:
+        """发送通知（同步接口，兼容性）"""
+        try:
+            # 检查是否在事件循环中
+            try:
+                loop = asyncio.get_running_loop()
+                # 如果在事件循环中，创建任务
+                asyncio.create_task(self.send_notification(title, content))
+            except RuntimeError:
+                # 如果不在事件循环中，创建新的事件循环
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.send_notification(title, content))
+                finally:
+                    loop.close()
+        except Exception as e:
+            logger.error(f"通知发送失败: {e}")
+
+    def get_provider_status(self) -> Dict[str, Dict[str, Any]]:
+        """获取提供者状态"""
+        status = {}
+        for provider in self._providers:
+            provider_name = provider.__class__.__name__
+            status[provider_name] = {
+                "configured": provider.is_configured(),
+                "type": provider_name.replace("Provider", "").lower()
+            }
+        return status
+
+    async def test_providers(self) -> Dict[str, bool]:
+        """测试所有提供者"""
+        test_title = "MediaHelper 通知测试"
+        test_content = "这是一条测试消息，用于验证通知配置是否正确。"
+
+        return await self.dispatch_notification(test_title, test_content)
+
+
+# 创建全局单例实例
+notification_manager = NotificationManager()

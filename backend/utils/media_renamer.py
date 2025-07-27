@@ -109,10 +109,12 @@ class MediaAnalyzer:
             # 通用集数+画质格式 - 支持各种分隔符和集数标识
             # 匹配: 前缀[分隔符]集数标识[分隔符]画质[分隔符后缀].扩展名
             # 例如: 萨达卡斯柯 E01 4k.mp4, show+02+1080p.mp4, series-S01E03-720p-final.mp4
-            ('universal_episode_quality', r'^(.+?)[\s\-_+.]*(?:S\d{1,2})?[Ee]?(\d{1,3})[\s\-_+.]*(?:1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+            # 注意：不匹配标准的S**E**格式，避免与标准格式冲突
+            ('universal_episode_quality', r'^(?!.*[Ss]\d{1,2}[Ee]\d{1,3})(.+?)[\s\-_+.]*[Ee](\d{1,3})[\s\-_+.]*(?:1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 更精确的通用模式 - 分别捕获画质
-            ('universal_episode_quality_precise', r'^(.+?)[\s\-_+.]*(?:S\d{1,2})?[Ee]?(\d{1,3})[\s\-_+.]*(1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
+            # 注意：不匹配标准的S**E**格式，避免与标准格式冲突
+            ('universal_episode_quality_precise', r'^(?!.*[Ss]\d{1,2}[Ee]\d{1,3})(.+?)[\s\-_+.]*[Ee](\d{1,3})[\s\-_+.]*(1080p|720p|480p|4K|2160p|UHD|HD|FHD|SD)[\s\-_+.]*.*?\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb)$'),
 
             # 综艺节目日期+期数格式 - 超宽泛匹配（优化版）
             # 支持: saa.24.02.22.第9期.mp4, show 25 03 14第十期.mp4, prefix-2025.03.14-第8期中.mp4 等
@@ -1467,6 +1469,7 @@ class MediaRenamer:
         self.formatter = MediaFormatter()
         self.batch_renamer = SmartBatchRenamer()
         self.template_manager = CustomTemplateManager()
+        self.context_inferrer = ContextInferrer()
         self.rename_history: List[Dict[str, str]] = []
 
     def analyze_filename(self, filename: str, context: Dict[str, Any] = None) -> MediaInfo:
@@ -1495,6 +1498,39 @@ class MediaRenamer:
             else:
                 # 预设模板
                 new_filename = self.formatter.format(media_info, template_name=template_name)
+
+        # 记录重命名历史
+        self.rename_history.append({
+            'original': filename,
+            'renamed': new_filename,
+            'media_type': media_info.media_type.value,
+            'title': media_info.title
+        })
+
+        return new_filename
+
+    def rename_file_with_template_override(self, filename: str, template: str, custom_title: str = None) -> str:
+        """使用模板重命名文件，支持模板中的硬编码季度覆盖"""
+        import re
+
+        # 分析媒体信息
+        context = {'series_title': custom_title} if custom_title else {}
+        media_info = self.analyzer.analyze(filename, context)
+
+        # 如果提供了自定义标题，使用自定义标题
+        if custom_title:
+            media_info.title = custom_title
+
+        # 检查模板中是否有硬编码的季度信息
+        season_match = re.search(r'S(\d+)', template)
+        if season_match:
+            # 模板中有硬编码季度，使用模板中的季度
+            template_season = int(season_match.group(1))
+            logger.debug(f"模板中发现硬编码季度: S{template_season:02d}，覆盖文件名中的季度信息")
+            media_info.season = template_season
+
+        # 格式化新文件名
+        new_filename = self.formatter.format(media_info, custom_template=template)
 
         # 记录重命名历史
         self.rename_history.append({
@@ -1612,6 +1648,8 @@ class MediaRenamer:
     def get_template_variables(self) -> Dict[str, str]:
         """获取可用的模板变量"""
         return self.template_manager.get_template_variables()
+
+    # ===== 兼容性方法 - 为 cloud189_auto_save.py 提供支持 =====
 
     def start_magic_is_save(self, start_magic: List, filename: str) -> bool:
         """判断文件是否应该保存（基于集数、季数等条件）"""
@@ -1891,16 +1929,52 @@ class MediaRenamer:
     def get_episodes(self, filename: str) -> Optional[int]:
         """从文件名中提取集数"""
         try:
-            media_info = self.analyzer.analyze(filename)
-            return media_info.episode
+            # 先从文件名提取
+            basename = Path(filename).name
+            media_info = self.analyzer.analyze(basename)
+            if media_info.episode:
+                return media_info.episode
+
+            # 如果文件名中没有集数信息，尝试从完整路径分析
+            if filename != basename:  # 说明传入的是完整路径
+                media_info = self.analyzer.analyze(filename)
+                return media_info.episode
+
+            return None
         except Exception as e:
             logger.warning(f"get_episodes 提取失败: {e}")
             return None
 
     def get_season(self, filename: str) -> Optional[int]:
-        """从文件名中提取季数"""
+        """从文件名和路径中提取季数"""
         try:
-            media_info = self.analyzer.analyze(filename)
+            basename = Path(filename).name
+
+            # 首先检查文件名是否明确包含季度信息（S**E**格式）
+            clean_name = self.analyzer._clean_filename(basename)
+            season_from_filename, _ = self.analyzer._extract_season_episode(clean_name)
+
+            if season_from_filename is not None:
+                # 文件名中明确包含季度信息，直接返回
+                return season_from_filename
+
+            # 文件名中没有明确的季度信息，尝试从目录路径提取
+            if filename != basename:  # 说明传入的是完整路径
+                path_obj = Path(filename)
+                # 从目录名中提取季数信息
+                for parent in path_obj.parents:
+                    parent_name = parent.name
+                    season = self.context_inferrer._extract_season_from_dirname(parent_name)
+                    if season and season >= 1:  # 修复：第1季也是有效的季度信息
+                        return season
+
+                # 最后尝试完整路径分析（可能包含更多上下文信息）
+                context = self.context_inferrer.infer_context([basename], str(path_obj.parent))
+                if context.get('season', 1) >= 1:  # 修复：第1季也是有效的季度信息
+                    return context['season']
+
+            # 如果都没有找到，使用完整分析的结果（可能包含不规范文件名的默认值）
+            media_info = self.analyzer.analyze(basename)
             return media_info.season
         except Exception as e:
             logger.warning(f"get_season 提取失败: {e}")
