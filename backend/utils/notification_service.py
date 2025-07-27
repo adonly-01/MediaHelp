@@ -136,11 +136,57 @@ class NotificationProviderFactory:
 class NotificationEvent:
     """通知事件"""
 
-    def __init__(self, title: str, content: str, priority: str = "normal"):
+    def __init__(self, title: str, content: str, priority: str = "normal", event_type: str = "general"):
         self.title = title
         self.content = content
         self.priority = priority
+        self.event_type = event_type
         self.timestamp = asyncio.get_event_loop().time()
+
+
+class MediaRenameNotification:
+    """媒体重命名通知格式化器"""
+
+    @staticmethod
+    def format_rename_success(task_name: str, renamed_files: List[Dict[str, Any]]) -> tuple[str, str]:
+        """格式化重命名成功通知"""
+        title = f"📁 {task_name} - 文件重命名完成"
+
+        if not renamed_files:
+            content = "本次执行没有需要重命名的文件"
+            return title, content
+
+        content_lines = [f"✅ 成功重命名 {len(renamed_files)} 个文件:\n"]
+
+        for file_info in renamed_files[:10]:  # 最多显示10个文件
+            original = file_info.get('file_name', '')
+            renamed = file_info.get('file_name_re', '')
+
+            if renamed and renamed != original:
+                content_lines.append(f"🎬 {original}")
+                content_lines.append(f"   ↳ {renamed}")
+            else:
+                content_lines.append(f"📄 {original}")
+
+        if len(renamed_files) > 10:
+            content_lines.append(f"\n... 还有 {len(renamed_files) - 10} 个文件")
+
+        content = "\n".join(content_lines)
+        return title, content
+
+    @staticmethod
+    def format_rename_error(task_name: str, error_message: str) -> tuple[str, str]:
+        """格式化重命名错误通知"""
+        title = f"❌ {task_name} - 文件重命名失败"
+        content = f"任务执行过程中发生错误:\n\n{error_message}"
+        return title, content
+
+    @staticmethod
+    def format_template_usage(template_name: str, usage_count: int) -> tuple[str, str]:
+        """格式化模板使用统计通知"""
+        title = f"📊 重命名模板使用统计"
+        content = f"模板 '{template_name}' 已被使用 {usage_count} 次"
+        return title, content
 
 
 class NotificationManager:
@@ -314,6 +360,57 @@ class NotificationManager:
         test_content = "这是一条测试消息，用于验证通知配置是否正确。"
 
         return await self.dispatch_notification(test_title, test_content)
+
+    # 媒体重命名相关的通知方法
+    async def notify_rename_success(self, task_name: str, renamed_files: List[Dict[str, Any]]) -> Dict[str, bool]:
+        """发送重命名成功通知"""
+        title, content = MediaRenameNotification.format_rename_success(task_name, renamed_files)
+        return await self.dispatch_notification(title, content, priority="normal")
+
+    async def notify_rename_error(self, task_name: str, error_message: str) -> Dict[str, bool]:
+        """发送重命名错误通知"""
+        title, content = MediaRenameNotification.format_rename_error(task_name, error_message)
+        return await self.dispatch_notification(title, content, priority="high")
+
+    async def notify_template_usage(self, template_name: str, usage_count: int) -> Dict[str, bool]:
+        """发送模板使用统计通知"""
+        title, content = MediaRenameNotification.format_template_usage(template_name, usage_count)
+        return await self.dispatch_notification(title, content, priority="low")
+
+    # 任务相关的通知方法
+    async def notify_task_start(self, task_name: str, task_type: str) -> Dict[str, bool]:
+        """发送任务开始通知"""
+        title = f"🚀 任务开始执行"
+        content = f"任务名称: {task_name}\n任务类型: {task_type}\n开始时间: {asyncio.get_event_loop().time()}"
+        return await self.dispatch_notification(title, content, priority="low")
+
+    async def notify_task_complete(self, task_name: str, task_type: str, duration: float, result: Dict[str, Any]) -> Dict[str, bool]:
+        """发送任务完成通知"""
+        title = f"✅ 任务执行完成"
+
+        content_lines = [
+            f"任务名称: {task_name}",
+            f"任务类型: {task_type}",
+            f"执行时长: {duration:.2f}秒",
+        ]
+
+        # 添加结果信息
+        if result:
+            if 'need_save_files' in result:
+                files_count = len(result['need_save_files'])
+                content_lines.append(f"处理文件: {files_count}个")
+
+            if 'renamed_count' in result:
+                content_lines.append(f"重命名文件: {result['renamed_count']}个")
+
+        content = "\n".join(content_lines)
+        return await self.dispatch_notification(title, content, priority="normal")
+
+    async def notify_task_error(self, task_name: str, task_type: str, error_message: str) -> Dict[str, bool]:
+        """发送任务错误通知"""
+        title = f"❌ 任务执行失败"
+        content = f"任务名称: {task_name}\n任务类型: {task_type}\n错误信息: {error_message}"
+        return await self.dispatch_notification(title, content, priority="high")
 
 
 # 创建全局单例实例

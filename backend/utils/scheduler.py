@@ -5,7 +5,7 @@ from loguru import logger
 import re
 from task import cloud189_auto_save
 from utils.emby_manager import emby_manager
-from utils.notification_service import notify_manager
+from utils.notification_service import notification_manager
 from utils.scheduled_manager import scheduled_manager
 
 class TaskResult:
@@ -303,6 +303,6 @@ class TaskScheduler:
                     flag.append(await emby_manager.searchAndRefreshItem(task_name))
             if all(flag):
                  message += "\n🔄 EMBY刷新媒体库成功"
-            notify_manager.send(title='📺MediaHelper 任务执行结果:', content=message)
+            notification_manager.send(title='📺MediaHelper 任务执行结果:', content=message)
 # 创建全局实例
 task_scheduler = TaskScheduler() 

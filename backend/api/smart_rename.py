@@ -4,7 +4,8 @@ from typing import Dict, List, Any, Optional
 from api.deps import get_current_user
 from models.user import User
 from schemas.response import Response
-from utils.media_renamer import MediaRenamer, SmartBatchRenamer, SmartRenameSuggester
+from utils.media_renamer import MediaRenamer, SmartBatchRenamer
+from utils.notification_service import notification_manager
 from loguru import logger
 
 router = APIRouter(prefix="/smart-rename", tags=["智能重命名"])
@@ -63,7 +64,6 @@ class RenameWithTemplateRequest(BaseModel):
 # 创建全局实例
 media_renamer = MediaRenamer()
 batch_renamer = SmartBatchRenamer()
-suggester = SmartRenameSuggester()
 
 @router.post("/file", response_model=Response[str])
 async def rename_single_file(
@@ -96,9 +96,24 @@ async def rename_batch_files(
             custom_title=req.custom_title,
             custom_season=req.custom_season
         )
+
+        # 发送批量重命名成功通知
+        if results:
+            await notification_manager.notify_rename_success(
+                req.custom_title or "批量重命名",
+                [{"file_name": f, "file_name_re": results.get(f)} for f in req.filenames]
+            )
+
         return Response(data=results, message="批量重命名成功")
     except Exception as e:
         logger.error(f"批量重命名失败: {e}")
+
+        # 发送批量重命名错误通知
+        await notification_manager.notify_rename_error(
+            req.custom_title or "批量重命名",
+            str(e)
+        )
+
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/preview", response_model=Response[Dict[str, Any]])
@@ -142,10 +157,31 @@ async def get_rename_suggestions(
 ):
     """获取重命名建议"""
     try:
-        suggestions = suggester.suggest_names(
+        # 使用媒体重命名器生成多种建议
+        suggestions = []
+
+        # 简洁格式建议
+        simple_result = media_renamer.rename_file(
             filename=req.filename,
+            style="simple",
             custom_title=req.custom_title
         )
+        suggestions.append({
+            "style": "简洁格式",
+            "result": simple_result
+        })
+
+        # 标准格式建议
+        standard_result = media_renamer.rename_file(
+            filename=req.filename,
+            style="standard",
+            custom_title=req.custom_title
+        )
+        suggestions.append({
+            "style": "标准格式",
+            "result": standard_result
+        })
+
         return Response(data=suggestions, message="获取建议成功")
     except Exception as e:
         logger.error(f"获取重命名建议失败: {e}")
@@ -258,4 +294,30 @@ async def clear_rename_history(current_user: User = Depends(get_current_user)):
         return Response(data=True, message="历史清空成功")
     except Exception as e:
         logger.error(f"清空重命名历史失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/notification/status", response_model=Response[Dict[str, Any]])
+async def get_notification_status(current_user: User = Depends(get_current_user)):
+    """获取通知状态"""
+    try:
+        status = notification_manager.get_provider_status()
+        return Response(data=status, message="获取通知状态成功")
+    except Exception as e:
+        logger.error(f"获取通知状态失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/notification/test", response_model=Response[Dict[str, bool]])
+async def test_rename_notification(current_user: User = Depends(get_current_user)):
+    """测试重命名通知"""
+    try:
+        # 发送测试通知
+        test_files = [
+            {"file_name": "1.mp4", "file_name_re": "测试剧集.S01E01.mp4"},
+            {"file_name": "2.mp4", "file_name_re": "测试剧集.S01E02.mp4"}
+        ]
+
+        results = await notification_manager.notify_rename_success("测试任务", test_files)
+        return Response(data=results, message="测试通知发送完成")
+    except Exception as e:
+        logger.error(f"测试重命名通知失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))

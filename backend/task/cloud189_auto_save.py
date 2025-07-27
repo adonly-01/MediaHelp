@@ -5,6 +5,7 @@ from loguru import logger
 from utils import config_manager, logger_service, scheduled_manager
 from utils.cloud189.client import Cloud189Client
 from utils.media_renamer import MediaRenamer, SmartBatchRenamer
+from utils.notification_service import notification_manager
 
 class Cloud189AutoSave:
     """天翼云盘自动保存任务处理器"""
@@ -289,6 +290,9 @@ class Cloud189AutoSave:
 
             logger_service.info_sync(f"天翼云盘自动转存任务开始 🏃‍➡️: {self.task_name}")
 
+            # 发送任务开始通知
+            await notification_manager.notify_task_start(self.task_name, "天翼云盘自动转存")
+
             # 验证必要参数
             share_url = self.params.get("shareUrl")
             target_dir = self.params.get("targetDir", "-11")
@@ -332,7 +336,8 @@ class Cloud189AutoSave:
             logger_service.info_sync(f"天翼云盘自动转存任务 {self.task_name} - {result_msg}")
             logger_service.info_sync(f"天翼云盘自动转存任务结束 🏁: {self.task_name}")
 
-            return {
+            # 准备返回结果
+            result = {
                 "task_name": self.task_name,
                 "task": self.task.get("task", ""),
                 "need_save_files": [
@@ -344,8 +349,34 @@ class Cloud189AutoSave:
                 ]
             }
 
+            # 发送任务完成通知
+            await notification_manager.notify_task_complete(
+                self.task_name,
+                "天翼云盘自动转存",
+                0.0,  # 这里可以添加实际的执行时间计算
+                result
+            )
+
+            # 如果有重命名的文件，发送重命名成功通知
+            if self.need_save_files_global:
+                await notification_manager.notify_rename_success(
+                    self.task_name,
+                    result["need_save_files"]
+                )
+
+            return result
+
         except Exception as e:
-            logger_service.error_sync(f"天翼云盘自动转存任务异常 🚨: {self.task_name} - {e}")
+            error_msg = str(e)
+            logger_service.error_sync(f"天翼云盘自动转存任务异常 🚨: {self.task_name} - {error_msg}")
+
+            # 发送任务错误通知
+            await notification_manager.notify_task_error(
+                self.task_name,
+                "天翼云盘自动转存",
+                error_msg
+            )
+
             return None
 
 
